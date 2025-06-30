@@ -352,4 +352,6 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
     _selective_run(newinterp)
 end
 
+include("precompile.jl")
+
 end # module TestRunner
