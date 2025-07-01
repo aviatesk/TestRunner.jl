@@ -438,6 +438,9 @@ function JI.lookup_return(frame::JI.Frame, node::Core.ReturnNode)
     return JI.lookup_return(JI.RecursiveInterpreter(), frame, node)
 end
 
+include("app.jl")
+using .TestRunnerApp: main
+
 include("precompile.jl")
 
 end # module TestRunner

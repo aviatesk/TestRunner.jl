@@ -26,9 +26,18 @@ using Pkg
 Pkg.add(path="/path/to/TestRunner")
 ```
 
-## Usage
+TestRunner can also be installed as a standalone Julia application:
 
-### Basic Usage
+```julia
+using Pkg
+Pkg.Apps.add("/path/to/TestRunner")
+```
+
+Note that you need to manually make `~/.julia/bin` available on the `PATH`
+environment for Julia app to be accessible.
+See <https://pkgdocs.julialang.org/dev/apps/> for the details.
+
+### Programmatic Usage
 
 ```julia
 using TestRunner
@@ -203,6 +212,58 @@ Mixed patterns      |    4      4  0.0s
 > the test results in an organized way and is not required for TestRunner
 > functionality itself.
 
+### Usage as an App
+
+TestRunner provides a CLI for selective test execution:
+
+```bash
+# Run specific testsets by name
+testrunner mypkg/runtests.jl.jl "basic tests" "advanced tests"
+
+# Run tests on specific lines
+testrunner mypkg/runtests.jl.jl L10
+testrunner mypkg/runtests.jl.jl L10:20
+
+# Run tests matching expression patterns
+testrunner mypkg/runtests.jl.jl ':(@test foo(x_) == y_)'
+
+# Run tests matching regex patterns
+testrunner mypkg/runtests.jl.jl r"^test.*basic"
+
+# Run all tests in a file
+testrunner mypkg/runtests.jl.jl
+
+# Combine patterns with filter lines
+testrunner mypkg/runtests.jl.jl "my tests" --filter-lines=10,15,20:25
+
+# Use verbose output
+testrunner mypkg/runtests.jl.jl L55:57 -v
+
+# Use a specific project environment
+testrunner mypkg/runtests.jl.jl --project=/path/to/project "my tests"
+
+# Search for project in parent directories
+testrunner mypkg/runtests.jl.jl --project=@. L10:20
+
+# Use temporary environment
+testrunner mypkg/runtests.jl.jl --project=@temp "basic tests"
+
+# Show help
+testrunner --help
+```
+
+Pattern formats:
+- `L10` - Run tests on line 10
+- `L10:20` - Run tests on lines 10-20
+- `:(expr)` - Match expression pattern
+- `r"^test.*"` - Match testset names with regex
+- `"my tests"` - Match testset by exact name (default)
+
+Options:
+- `--project[=<dir>]` - Set project/environment (same format and meaning as Julia's `--project` flag)
+- `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
+- `--verbose` or `-v` - Show verbose output
+
 ## How It Works
 
 TestRunner leverages JuliaInterpreter and LoweredCodeUtils to selectively
@@ -337,7 +398,7 @@ unrelated tests while still ensuring all code dependencies are available.
      be matched
 
    **Workarounds** (see [workaround3.jl](./limitations/workaround3.jl)):
-   
+
    1. Move tests into `@testset` blocks:
    ```julia
    @testset "arithmetic tests" begin
