@@ -83,15 +83,11 @@ end
 
 function _selective_run(interp::TRInterpreter, filter_lines::Union{Nothing,Set{Int}}=nothing)
     filename = interp.filename
-    if !isfile(filename)
-        error("File not found: $filename")
-    end
+    isfile(filename) || throw(SystemError(lazy"opening file \"$filename\""), 2, nothing)
     toptext = read(filename, String)
     stream = JS.ParseStream(toptext)
     JS.parse!(stream; rule=:all)
-    if !isempty(stream.diagnostics)
-        throw(JS.ParseError(stream))
-    end
+    isempty(stream.diagnostics) || throw(JS.ParseError(stream))
     sntop = JS.build_tree(JS.SyntaxNode, stream; filename)
     _selective_run(interp, sntop, filter_lines)
 end
@@ -299,6 +295,9 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
     LCU.add_active_gotos!(concretized, src, cfg, postdomtree)
 end
 
+# This overload has exactly the same implementation as `JI.evaluate_call!(::JI.NonRecursiveInterpreter, ...)`,
+# but since the default `JI.evaluate_call!(::Interpreter, ...)` is for the recursive interpretation,
+# we need to provide this implementation for `TRInterpreter`.
 function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, call_expr::Expr, enter_generated::Bool=false)
     # @assert !enter_generated
     pc = frame.pc
@@ -311,7 +310,7 @@ function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, call_expr::Ex
 end
 
 # This overload performs almost the same work as
-# `JuliaInterpreter.evaluate_call!(::JuliaInterpreter.NonRecursiveInterpreter, ...)`
+# `JI.evaluate_call!(::JI.NonRecursiveInterpreter, ...)`
 # but includes a few important adjustments specific to TestRunner's virtual process:
 # - Special handling for `include` calls: recursively apply the virtual process to included files.
 function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, fargs::Vector{Any}, ::Bool)
