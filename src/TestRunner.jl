@@ -76,6 +76,9 @@ function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
                  topmodule::Module=Main)
     patterns = Any[pat for pat in patterns]
+    if isempty(patterns)
+        error("No patterns specified. Use `include` to run all tests.")
+    end
     filter_lines_set = filter_lines === nothing ? nothing : Set{Int}(filter_lines)
     interp = TRInterpreter(patterns, filename, topmodule)
     _selective_run(interp, filter_lines_set)

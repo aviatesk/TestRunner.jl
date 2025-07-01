@@ -206,10 +206,10 @@ function parse_pattern(pattern::String)
     elseif startswith(pattern, "r\"") && endswith(pattern, "\"")
         # Extract content between quotes (skip 'r"' at start and '"' at end)
         regex_content = pattern[3:end-1]
-        
+
         # Unescape escaped quotes
         regex_content = replace(regex_content, "\\\"" => "\"")
-        
+
         try
             return Regex(regex_content)
         catch e
@@ -323,6 +323,7 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
         try
             project_path = parse_project_path(project, filepath)
             if verbose
+                header_print("Test Setup")
                 info_print("Activating project: $(BOLD)$project$(RESET)")
                 detail_print("Project path: $project_path")
             end
@@ -365,14 +366,23 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
             info_print("Filter lines: $(join(sorted_lines, ", "))")
         end
 
+        if isempty(patterns)
+            info_print("No patterns specified, running all tests with `include`")
+        end
+
         header_print("Running Tests")
     end
 
     try
-        result = if verbose
-            Test.@testset "$filename" verbose=true runtest(filepath, patterns; filter_lines)
+        if isempty(patterns)
+            # If both patterns and filter_lines are empty, just include the file
+            include(filepath)
         else
-            Test.@testset "$filename" runtest(filepath, patterns; filter_lines)
+            result = if verbose
+                Test.@testset "$filename" verbose=true runtest(filepath, patterns; filter_lines)
+            else
+                Test.@testset "$filename" runtest(filepath, patterns; filter_lines)
+            end
         end
         return 0
     catch e
