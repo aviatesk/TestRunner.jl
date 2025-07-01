@@ -10,8 +10,9 @@ module PrecompileModule4 end
 module PrecompileModule5 end
 
 @setup_workload let
+    demo_file = pkgdir(TestRunner, "demo.jl")
+    include_dependency(demo_file)
     @compile_workload redirect_stdout(devnull) do
-        demo_file = pkgdir(TestRunner, "demo.jl")
         runtest(demo_file, ["basic tests"]; topmodule=PrecompileModule1); # Run "basic tests" including @test_broken
         runtest(demo_file, [:(@test process(s_) == n_)]; topmodule=PrecompileModule2) # Run tests that call the process function
         runtest(demo_file, [r".*tests"]; topmodule=PrecompileModule3)
