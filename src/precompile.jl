@@ -1,6 +1,6 @@
 module Precompile
 
-using ..TestRunner: TestRunner, runtest
+using ..TestRunner: TestRunner, runtest, main
 using PrecompileTools
 
 module PrecompileModule1 end
@@ -18,6 +18,8 @@ module PrecompileModule5 end
         runtest(demo_file, [r".*tests"]; topmodule=PrecompileModule3)
         runtest(demo_file, ["inner tests 1"]; topmodule=PrecompileModule4); # Run a specific nested testset
         runtest(demo_file, [:(@test startswith(s_, prefix_))]; topmodule=PrecompileModule5); # Match expression patterns within nested testsets
+
+        main(["--help"])
     end
 end
 
