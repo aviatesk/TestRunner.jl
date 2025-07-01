@@ -40,8 +40,6 @@
 
 # Running Test Code
 Please make sure to test new code when you wrote.
-When running tests, use `JULIA_EXECUTABLE` environment variable if it exists.
-If it does not exist, simply use the `julia` command.
 
 If explicit test file or code is provided, prioritize running that.
 Otherwise, you can run the entire test suite for the JETLS project by executing
@@ -50,9 +48,10 @@ Otherwise, you can run the entire test suite for the JETLS project by executing
 For example, if you receive a prompt like this:
 > Improve the error message of diagnostics.
 > Use test/test_pattern_matching for the test cases.
-And if `JULIA_EXECUTABLE` exists, the command you should run is:
+
+The command you should run is:
 ```
-$ $JULIA_EXECUTABLE --startup-file=no -e 'using Test; @testset "pattern_matching" include("test/test_pattern_matching")'
+$ julia --startup-file=no -e 'using Test; @testset "pattern_matching" include("test/test_pattern_matching")'
 ```
 Note that the usage of the `--startup-file=no` flag, which avoids loading
 unnecessary startup utilities.
