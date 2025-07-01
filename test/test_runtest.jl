@@ -148,4 +148,16 @@ module LinePatternModule3 end
     end
 end
 
+# Test local dependency tracking
+module DependencyModule1 end
+module DependencyModule2 end
+let dependency_file = joinpath(@__DIR__, "testfile_dependency_tracking.jl")
+    let result = @testset "dependency tracking 1" runtest(dependency_file, [:(@test length(xs1) == 1)]; topmodule=DependencyModule1)
+        @test result.n_passed == 1
+    end
+    let result = @testset "dependency tracking 2" runtest(dependency_file, [:(@test length(xs2) == 2)]; topmodule=DependencyModule2)
+        @test result.n_passed == 1
+    end
+end
+
 end # module test_runtest

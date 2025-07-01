@@ -273,6 +273,7 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
 
     select_dependencies!(concretized, src, edges, cl)
 
+    # Debug: uncomment to see which statements are selected
     # LCU.print_with_code(stdout, src, concretized)
 
     nothing
@@ -282,17 +283,98 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
     typedefs = LCU.find_typedefs(src)
     cfg = CC.compute_basic_blocks(src.code)
     postdomtree = CC.construct_postdomtree(cfg.blocks)
+    ssavalue_uses = CC.find_ssavalue_uses(src.code, length(src.code))
 
     changed = true
     while changed
         changed = false
 
         changed |= LCU.add_ssa_preds!(concretized, src, edges, ())
+        changed |= add_ssas_uses!(concretized, ssavalue_uses)
+        changed |= add_slot_deps!(concretized, cl)
         changed |= LCU.add_typedefs!(concretized, src, edges, typedefs, ())
         changed |= LCU.add_control_flow!(concretized, src, cfg, postdomtree)
     end
 
     LCU.add_active_gotos!(concretized, src, cfg, postdomtree)
+end
+
+# Add statements that use SSA values produced by already selected statements
+function add_ssas_uses!(concretized::BitVector, ssavalue_uses)
+    changed = false
+    for idx = 1:length(concretized)
+        if concretized[idx]
+            for use_idx in ssavalue_uses[idx]
+                if !concretized[use_idx]
+                    concretized[use_idx] = true
+                    changed = true
+                end
+            end
+        end
+    end
+    return changed
+end
+
+function add_slot_deps!(concretized::BitVector, cl::LCU.CodeLinks)
+    changed = false
+
+    # For each slot, check if any selected statement uses it
+    for slot_id = 1:length(cl.slotsuccs)
+        slot_succs = cl.slotsuccs[slot_id]
+        slot_preds = cl.slotpreds[slot_id]
+        slot_assigns = cl.slotassigns[slot_id]
+
+        # Check if any successor (user) of this slot is selected
+        is_selected = false
+        for succ_idx in slot_succs.ssas
+            if concretized[succ_idx]
+                is_selected = true
+                break
+            end
+        end
+
+        is_selected || continue
+
+        # If this slot is selected, we need to select:
+        # 1. All predecessors (statements that the slot depends on)
+        # 2. All assignments to the slot
+        # 3. All prior uses of the slot (to ensure their dependencies are tracked)
+
+        # Select predecessors
+        for pred_idx in slot_preds.ssas
+            if !concretized[pred_idx]
+                concretized[pred_idx] = true
+                changed = true
+            end
+        end
+
+        for assign_idx in slot_assigns
+            if !concretized[assign_idx]
+                concretized[assign_idx] = true
+                changed = true
+            end
+        end
+
+        # Select all prior uses of the slot (to ensure their effects are included)
+        for succ_idx in slot_succs.ssas
+            if !concretized[succ_idx]
+                # Only select uses that come before the latest selected use
+                # This helps avoid selecting unrelated later uses
+                latest_selected = 0
+                for idx in slot_succs.ssas
+                    if concretized[idx]
+                        latest_selected = max(latest_selected, idx)
+                    end
+                end
+                if succ_idx < latest_selected
+                    concretized[succ_idx] = true
+                    changed = true
+                end
+            end
+        end
+    end
+
+    return changed
 end
 
 # This overload has exactly the same implementation as `JI.evaluate_call!(::JI.NonRecursiveInterpreter, ...)`,
@@ -349,6 +431,11 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
     included_file = normpath(dirname(interp.filename), fname)
     newinterp = TRInterpreter(interp; filename=included_file, context=include_context)
     _selective_run(newinterp)
+end
+
+# Add missing method for JuliaInterpreter compatibility
+function JI.lookup_return(frame::JI.Frame, node::Core.ReturnNode)
+    return JI.lookup_return(JI.RecursiveInterpreter(), frame, node)
 end
 
 include("precompile.jl")
