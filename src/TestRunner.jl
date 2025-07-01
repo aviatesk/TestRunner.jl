@@ -433,11 +433,6 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
     _selective_run(newinterp)
 end
 
-# Add missing method for JuliaInterpreter compatibility
-function JI.lookup_return(frame::JI.Frame, node::Core.ReturnNode)
-    return JI.lookup_return(JI.RecursiveInterpreter(), frame, node)
-end
-
 include("app.jl")
 using .TestRunnerApp: main
 
