@@ -21,33 +21,63 @@ dependencies are executed.
 
 ## Installation
 
-```julia
-using Pkg
-Pkg.add(path="/path/to/TestRunner")
+```julia-repl
+pkg> add /path/to/TestRunner
 ```
 
 TestRunner can also be installed as a standalone Julia application:
 
-```julia
-using Pkg
-Pkg.Apps.add("/path/to/TestRunner")
+```julia-repl
+pkg> app add /path/to/TestRunner
 ```
 
 Note that you need to manually make `~/.julia/bin` available on the `PATH`
 environment for Julia app to be accessible.
 See <https://pkgdocs.julialang.org/dev/apps/> for the details.
 
-### Programmatic Usage
+### Quick Start
+```julia
+julia> using TestRunner
+
+julia> runtest("demo.jl", ["basic tests"]) # Run tests matching a specific testset name
+
+julia> runtest("demo.jl", ["basic tests", "struct tests"]) # Run multiple testsets
+
+julia> runtest("demo.jl", [:(@test startswith(inner_func2(), "inner"))]) # Run standalone test case
+```
+
+Or quivalently via the command line app:
+```bash
+$ testrunner demo.jl "basic tests"
+
+$ testrunner demo.jl "basic tests" "struct tests"
+
+$ testrunner demo.jl "(:(@test startswith(inner_func2(), "inner")))"
+```
+
+## Programmatic Usage
+
+### API
 
 ```julia
-using TestRunner
-
-# Run tests matching a specific testset name
-runtest("demo.jl", ["basic tests"])
-
-# Run multiple testsets
-runtest("demo.jl", ["basic tests", "struct tests"])
+runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
 ```
+
+Run tests from a file that match the given patterns and/or are on the
+specified lines.
+
+**Arguments:**
+- `filename::AbstractString`: Path to the test file
+- `patterns`: Patterns to match. Can be strings, regexes, expressions, integers (line numbers),
+  or ranges (line ranges)
+- `filter_lines=nothing`: Optional line numbers to filter pattern matches. When provided, only
+  pattern matches that overlap with these lines will be executed. This is particularly useful for
+  IDE integration where clicking on a specific test should run only that test, even when multiple
+  tests may match the same pattern
+- `topmodule::Module=Main`: Module context for execution (default: `Main`)
+
+**Returns:**
+- Test results from the selectively executed tests
 
 ### Pattern Types
 
@@ -84,7 +114,53 @@ runtest("demo.jl", [10:15])
 runtest("demo.jl", ["basic tests", 42, 50:55])
 ```
 
-### Examples
+## App Usage
+
+TestRunner can be installed as a CLI executable (see the [installation](#installation) section):
+
+```bash
+# Run specific testsets by name
+testrunner mypkg/runtests.jl.jl "basic tests" "advanced tests"
+
+# Run tests on specific lines
+testrunner mypkg/runtests.jl.jl L10
+testrunner mypkg/runtests.jl.jl L10:20
+
+# Run tests matching expression patterns
+testrunner mypkg/runtests.jl.jl ':(@test foo(x_) == y_)'
+
+# Run tests matching regex patterns
+testrunner mypkg/runtests.jl.jl r"^test.*basic"
+
+# Run all tests in a file
+testrunner mypkg/runtests.jl.jl
+
+# Combine patterns with filter lines
+testrunner mypkg/runtests.jl.jl "my tests" --filter-lines=10,15,20:25
+
+# Use verbose output
+testrunner -v mypkg/runtests.jl.jl L55:57
+
+# Use a specific project environment
+testrunner --project=/path/to/project mypkg/runtests.jl.jl "my tests"
+
+# Show help
+testrunner --help
+```
+
+Pattern formats:
+- `L10` - Run tests on line 10
+- `L10:20` - Run tests on lines 10-20
+- `:(expr)` - Match expression pattern
+- `r"^test.*"` - Match testset names with regex
+- `"my tests"` - Match testset by exact name (default)
+
+Options:
+- `--project[=<dir>]` - Set project/environment (same format and meaning as Julia's `--project` flag)
+- `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
+- `--verbose` or `-v` - Show verbose output
+
+## Examples
 
 Given this [demo.jl](./demo.jl) file:
 
@@ -211,58 +287,6 @@ Mixed patterns      |    4      4  0.0s
 > Note that the `@testset "xxx runner" verbose=true` part is used only to show
 > the test results in an organized way and is not required for TestRunner
 > functionality itself.
-
-### Usage as an App
-
-TestRunner provides a CLI for selective test execution:
-
-```bash
-# Run specific testsets by name
-testrunner mypkg/runtests.jl.jl "basic tests" "advanced tests"
-
-# Run tests on specific lines
-testrunner mypkg/runtests.jl.jl L10
-testrunner mypkg/runtests.jl.jl L10:20
-
-# Run tests matching expression patterns
-testrunner mypkg/runtests.jl.jl ':(@test foo(x_) == y_)'
-
-# Run tests matching regex patterns
-testrunner mypkg/runtests.jl.jl r"^test.*basic"
-
-# Run all tests in a file
-testrunner mypkg/runtests.jl.jl
-
-# Combine patterns with filter lines
-testrunner mypkg/runtests.jl.jl "my tests" --filter-lines=10,15,20:25
-
-# Use verbose output
-testrunner mypkg/runtests.jl.jl L55:57 -v
-
-# Use a specific project environment
-testrunner mypkg/runtests.jl.jl --project=/path/to/project "my tests"
-
-# Search for project in parent directories
-testrunner mypkg/runtests.jl.jl --project=@. L10:20
-
-# Use temporary environment
-testrunner mypkg/runtests.jl.jl --project=@temp "basic tests"
-
-# Show help
-testrunner --help
-```
-
-Pattern formats:
-- `L10` - Run tests on line 10
-- `L10:20` - Run tests on lines 10-20
-- `:(expr)` - Match expression pattern
-- `r"^test.*"` - Match testset names with regex
-- `"my tests"` - Match testset by exact name (default)
-
-Options:
-- `--project[=<dir>]` - Set project/environment (same format and meaning as Julia's `--project` flag)
-- `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
-- `--verbose` or `-v` - Show verbose output
 
 ## How It Works
 
@@ -413,28 +437,6 @@ unrelated tests while still ensuring all code dependencies are available.
        test_arithmetic()  # Now these tests execute when this testset is selected
    end
    ```
-
-## API
-
-```julia
-runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
-```
-
-Run tests from a file that match the given patterns and/or are on the
-specified lines.
-
-**Arguments:**
-- `filename::AbstractString`: Path to the test file
-- `patterns`: Patterns to match. Can be strings, regexes, expressions, integers (line numbers),
-  or ranges (line ranges)
-- `filter_lines=nothing`: Optional line numbers to filter pattern matches. When provided, only
-  pattern matches that overlap with these lines will be executed. This is particularly useful for
-  IDE integration where clicking on a specific test should run only that test, even when multiple
-  tests may match the same pattern
-- `topmodule::Module=Main`: Module context for execution (default: `Main`)
-
-**Returns:**
-- Test results from the selectively executed tests
 
 ## Development
 
