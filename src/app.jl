@@ -376,13 +376,9 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
     try
         if isempty(patterns)
             # If both patterns and filter_lines are empty, just include the file
-            include(filepath)
+            result = Test.@testset "$filename" verbose=verbose Main.include(filepath)
         else
-            result = if verbose
-                Test.@testset "$filename" verbose=true runtest(filepath, patterns; filter_lines)
-            else
-                Test.@testset "$filename" runtest(filepath, patterns; filter_lines)
-            end
+            result = Test.@testset "$filename" verbose=verbose runtest(filepath, patterns; filter_lines)
         end
         return 0
     catch e
