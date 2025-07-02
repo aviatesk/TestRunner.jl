@@ -1,6 +1,6 @@
 module TestRunner
 
-export runtest
+export runtest, runtests
 
 using Core.IR
 using Compiler: Compiler as CC
@@ -11,10 +11,10 @@ using MacroTools: MacroTools
 
 struct TRInterpreter <: JI.Interpreter
     # constant across execution
-    patterns::Dict{String,Vector{Any}}
-    filter_lines::Dict{String,Set{Int}}
+    patterns::Dict{String,Vector{Any}}   # absolute path => patterns
+    filter_lines::Dict{String,Set{Int}}  # absolute path => filter lines
     # constant across per-file execution
-    filename::String
+    filename::String # absolute path
     context::Module
 end
 function TRInterpreter(interp::TRInterpreter;
@@ -82,13 +82,95 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
                  topmodule::Module=Main)
-    patterns = Dict{String,Vector{Any}}(filename => Any[pat for pat in patterns])
+    filepath = abspath(filename)
+    patterns = Dict{String,Vector{Any}}(filepath => Any[pat for pat in patterns])
     if isnothing(filter_lines)
         filter_lines = Dict{String,Set{Int}}()
     else
-        filter_lines = Dict{String,Set{Int}}(filename => Set{Int}(filter_lines))
+        filter_lines = Dict{String,Set{Int}}(filepath => Set{Int}(filter_lines))
     end
-    interp = TRInterpreter(patterns, filter_lines, filename, topmodule)
+    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule)
+    _selective_run(interp)
+end
+
+"""
+    runtests(entryfilename::AbstractString, patterns;
+             filter_lines=nothing,
+             topmodule::Module=Main)
+
+Run tests from multiple files with file-specific pattern matching configurations.
+
+This function allows you to specify different patterns for different files, enabling
+fine-grained control over which tests run in each file. This is particularly useful
+for test suites that include multiple test files via `include` statements.
+
+# Arguments
+- `entryfilename::AbstractString`: Path to the entry point test file (e.g., "test/runtests.jl")
+- `patterns`: A collection of `filename => patterns_collection` pairs that specify which
+  patterns to match in each file. For example:
+  ```julia
+  patterns = [
+      "test/runtests.jl" => ["integration tests"],
+      "test/unit_tests.jl" => [r"fast.*", :(@test foo(x_) == y_)],
+      "test/perf_tests.jl" => [50:100]  # run tests on lines 50-100
+  ]
+  ```
+  Files not listed in this dictionary will have all their top-level code executed
+  (excluding `@test` and `@testset` expressions)
+- `filter_lines=nothing`: Optional collection of `filename => line_numbers` pairs that
+  specify line-based filtering for each file. When provided for a file, only pattern matches
+  that overlap with the specified lines will be executed in that file
+- `topmodule::Module=Main`: Module context for execution (default: `Main`)
+
+# Returns
+Test results from the selectively executed tests across all files.
+
+# Examples
+```julia
+# Run specific tests in different included files
+runtests("test/runtests.jl", [
+    "test/runtests.jl" => ["basic tests"],
+    "test/integration.jl" => [r"api.*"],
+    "test/utils.jl" => [:(@test validate(x_))]
+])
+
+# Run tests on specific lines in different files
+runtests("test/runtests.jl", [
+    "test/runtests.jl" => [],  # no tests in entry file
+    "test/core.jl" => [10:50, 100:150],
+    "test/edge_cases.jl" => [25, 30, 35]
+])
+
+# Combine with line filtering for precise control
+runtests("test/runtests.jl",
+    ["test/core.jl" => ["important tests"]],
+    filter_lines=["test/core.jl" => [45, 46, 47]]
+)
+```
+
+# Notes
+- The entry file is always executed starting from `entryfilename`
+- Files included via `include()` statements will be discovered and processed automatically
+- For files not specified in `patterns`, all non-test top-level code is executed
+  (no @test or @testset expressions will run)
+- Pattern types for each file follow the same rules as `runtest`:
+  strings, regexes, expressions, integers, and ranges
+"""
+function runtests(entryfilename::AbstractString, patterns_for_files;
+                  filter_lines_for_files=nothing,
+                  topmodule::Module=Main)
+    patterns = Dict{String,Vector{Any}}()
+    for (filepath, pats) in patterns_for_files
+        patterns[abspath(filepath)] = Any[pat for pat in pats]
+    end
+    filter_lines = Dict{String,Set{Int}}()
+    if !isnothing(filter_lines_for_files)
+        for (filepath, lines) in filter_lines_for_files
+            filter_lines[abspath(filepath)] = Set{Int}(lines)
+        end
+    end
+    filepath = abspath(entryfilename)
+    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule)
     _selective_run(interp)
 end
 

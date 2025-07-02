@@ -173,4 +173,49 @@ let testfile = joinpath(@__DIR__, "testfile_included_tests.jl")
     end
 end
 
+module RunTestsModule1 end
+module RunTestsModule2 end
+module RunTestsModule3 end
+@testset "runtests function" begin
+    # Test runtests with specific patterns for different files
+    let testfile = joinpath(@__DIR__, "testfile_included_tests.jl")
+        included1 = joinpath(@__DIR__, "_testfile_included1.jl")
+        included2 = joinpath(@__DIR__, "_testfile_included2.jl")
+
+        # Run specific pattern in main file and included file 1
+        let result = @testset "runtests specific patterns" runtests(testfile, [
+            testfile => ["included1"],
+            included1 => [:(@test 1 > 0)]
+        ]; topmodule=RunTestsModule1)
+            # Should run "included1" testset (2 tests) and one specific test from included1
+            @test result.n_passed == 0
+            @test length(result.results) == 1
+            @test only(result.results).n_passed == 1  # The specific test from included1
+        end
+
+        # Run with empty patterns for entry file (no tests) but specific pattern in included file
+        let result = @testset "runtests empty entry patterns" runtests(testfile, [
+            testfile => [:(include("_testfile_included2.jl"))],
+            included2 => ["testset 2"]
+        ]; topmodule=RunTestsModule2)
+            # Should only run "testset 2" from included2
+            @test length(result.results) == 1
+            @test only(result.results).n_passed == 2
+        end
+
+        # Test with line-based filtering
+        let result = @testset "runtests with filter lines" runtests(testfile, [
+            testfile => ["included1"]
+            included1 => [:(@test 0 == 0.)]
+        ], filter_lines_for_files=[
+            included1 => [6]  # Only line 6
+        ]; topmodule=RunTestsModule3)
+            # Should only run the test on line 6
+            @test result.n_passed == 0
+            @test length(result.results) == 1
+            @test only(result.results).n_passed == 1  # The specific test from included1
+        end
+    end
+end
+
 end # module test_runtest

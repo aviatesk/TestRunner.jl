@@ -59,6 +59,8 @@ $ testrunner demo.jl "(:(@test startswith(inner_func2(), "inner")))"
 
 ### API
 
+#### `runtest`
+
 ```julia
 runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
 ```
@@ -78,6 +80,14 @@ specified lines.
 
 **Returns:**
 - Test results from the selectively executed tests
+
+#### `runtests`
+
+The package also provides a `runtests` function for advanced use cases like
+selectively running package test cases from `test/runtests.jl`, where
+you need to specify different patterns for different files in a test suite
+that includes multiple files via `include` statements.
+See its docstring for detailed usage.
 
 ### Pattern Types
 
