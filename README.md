@@ -52,7 +52,7 @@ $ testrunner demo.jl "basic tests"
 
 $ testrunner demo.jl "basic tests" "struct tests"
 
-$ testrunner demo.jl "(:(@test startswith(inner_func2(), "inner")))"
+$ testrunner demo.jl '(:(@test startswith(inner_func2(), "inner")))'
 ```
 
 ## Programmatic Usage
