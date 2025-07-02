@@ -179,7 +179,8 @@ function traverse(f, node::JS.SyntaxNode)
     end
 end
 
-function matched_lines!(lines::Set{Int}, sn::JS.SyntaxNode, patterns, filter_lines::Union{Nothing,Set{Int}}=nothing)
+function matched_lines!(lines::Set{Int}, sn::JS.SyntaxNode, patterns::Vector{Any},
+                        filter_lines::Union{Nothing,Set{Int}}=nothing)
     # First, handle line number patterns (Int and UnitRange{Int})
     for pattern in patterns
         if pattern isa Integer
@@ -215,7 +216,7 @@ function matched_lines!(lines::Set{Int}, sn::JS.SyntaxNode, patterns, filter_lin
     return lines
 end
 
-function matches_pattern(@nospecialize(expr), patterns)
+function matches_pattern(@nospecialize(expr), patterns::Vector{Any})
     for pattern in patterns
         if pattern isa Integer || pattern isa UnitRange{<:Integer}
             # Skip line number patterns - they are handled separately
