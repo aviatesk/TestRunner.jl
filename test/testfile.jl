@@ -17,7 +17,7 @@ end
 # standalone test case
 @test standalone_test_func(π) ≈ 0
 
-include("testfile_included.jl")
+include("_testfile_included.jl")
 # `include` would be executed automatically
 @test included_test_func(π) ≈ 0
 

@@ -160,4 +160,17 @@ let dependency_file = joinpath(@__DIR__, "testfile_dependency_tracking.jl")
     end
 end
 
+module IncludedTests1 end
+module IncludedTests2 end
+let testfile = joinpath(@__DIR__, "testfile_included_tests.jl")
+    let result = @testset "included tests 1" runtest(testfile, ["included1"]; topmodule=IncludedTests1)
+        @test length(result.results) == 1
+        @test only(result.results).n_passed == 2
+    end
+    let result = @testset "included tests 2" runtest(testfile, [:(include("_testfile_included2.jl"))]; topmodule=IncludedTests2)
+        @test length(result.results) == 1
+        @test only(result.results).n_passed == 2
+    end
+end
+
 end # module test_runtest

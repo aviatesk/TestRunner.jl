@@ -10,15 +10,19 @@ using JuliaSyntax: JuliaSyntax as JS
 using MacroTools: MacroTools
 
 struct TRInterpreter <: JI.Interpreter
-    patterns::Vector{Any}
+    # constant across execution
+    patterns::Dict{String,Vector{Any}}
+    filter_lines::Dict{String,Set{Int}}
+    # constant across per-file execution
     filename::String
     context::Module
 end
 function TRInterpreter(interp::TRInterpreter;
-                       patterns::Vector{Any} = interp.patterns,
+                       patterns::Dict{String,Vector{Any}} = interp.patterns,
+                       filter_lines::Dict{String,Set{Int}} = interp.filter_lines,
                        filename::String = interp.filename,
                        context::Module = interp.context)
-    return TRInterpreter(patterns, filename, context)
+    return TRInterpreter(patterns, filter_lines, filename, context)
 end
 
 """
@@ -71,20 +75,24 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 - Only top-level code is interpreted; function calls within tests are compiled for performance
 - When a pattern matches within a testset, currently all tests in that testset are executed
   due to limitations in source provenance tracking
+- If an empty patterns collection is provided, only non-test top-level code will be executed
+  (no `@test` or `@testset` expressions will run). This includes all function definitions,
+  imports, and other setup code, including any `include` statements
 """
 function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
                  topmodule::Module=Main)
-    patterns = Any[pat for pat in patterns]
-    if isempty(patterns)
-        error("No patterns specified. Use `include` to run all tests.")
+    patterns = Dict{String,Vector{Any}}(filename => Any[pat for pat in patterns])
+    if isnothing(filter_lines)
+        filter_lines = Dict{String,Set{Int}}()
+    else
+        filter_lines = Dict{String,Set{Int}}(filename => Set{Int}(filter_lines))
     end
-    filter_lines_set = filter_lines === nothing ? nothing : Set{Int}(filter_lines)
-    interp = TRInterpreter(patterns, filename, topmodule)
-    _selective_run(interp, filter_lines_set)
+    interp = TRInterpreter(patterns, filter_lines, filename, topmodule)
+    _selective_run(interp)
 end
 
-function _selective_run(interp::TRInterpreter, filter_lines::Union{Nothing,Set{Int}}=nothing)
+function _selective_run(interp::TRInterpreter)
     filename = interp.filename
     isfile(filename) || throw(SystemError(lazy"opening file \"$filename\""), 2, nothing)
     toptext = read(filename, String)
@@ -92,10 +100,10 @@ function _selective_run(interp::TRInterpreter, filter_lines::Union{Nothing,Set{I
     JS.parse!(stream; rule=:all)
     isempty(stream.diagnostics) || throw(JS.ParseError(stream))
     sntop = JS.build_tree(JS.SyntaxNode, stream; filename)
-    _selective_run(interp, sntop, filter_lines)
+    _selective_run(interp, sntop)
 end
 
-function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode, filter_lines::Union{Nothing,Set{Int}})
+function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
     vnodes = JS.SyntaxNode[]
     if JS.kind(sntop) == JS.K"toplevel"
         for i = JS.numchildren(sntop):-1:1
@@ -117,7 +125,7 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode, filter_line
             newcontext = Core.eval(context, Expr(:module, !isbare, Expr(ModuleName), Expr(:block, lnn)))
             newinterp = TRInterpreter(interp; context=newcontext)
             for newsn in JS.children(newsntop)
-                _selective_run(newinterp, newsn, filter_lines)
+                _selective_run(newinterp, newsn)
             end
             continue
         end
@@ -130,10 +138,12 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode, filter_line
         # For the meanwhile, we should also raise an error to indicate that
         # TestRunner fails to selectively execute such code.
 
-        if is_test_expr
+        patterns = get(interp.patterns, interp.filename, nothing)
+
+        if !isnothing(patterns) && is_test_expr
             # For @testset and @test, use pattern matching
             lines = Set{Int}()
-            matched_lines!(lines, node, interp.patterns, filter_lines)
+            matched_lines!(lines, node, patterns, get(interp.filter_lines, interp.filename, nothing))
 
             expr = Expr(:block, expr, lnn)
             lwr = Meta.lower(context, expr)
@@ -150,7 +160,8 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode, filter_line
             frame = JI.Frame(interp.context, src)
             LCU.selective_eval_fromstart!(interp, frame, concretized, #=istoplevel=#true)
         else
-            # For non-test top-level code, execute unconditionally
+            # Unconditionally execute non-test top-level code,
+            # or no patterns are specified for this file.
             # Note: We use `JI.finish!` here instead of `Core.eval`
             # to ensure proper handling of `include` statements through our
             # custom `evaluate_call!` implementation
