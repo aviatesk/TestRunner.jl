@@ -5,21 +5,41 @@ using Test: Test
 using MacroTools: MacroTools
 using ..TestRunner: runtest
 
-# ANSI color codes
-const RESET = "\033[0m"
-const BOLD = "\033[1m"
-const RED = "\033[31m"
-const GREEN = "\033[32m"
-const YELLOW = "\033[33m"
-const BLUE = "\033[34m"
-const CYAN = "\033[36m"
-const GRAY = "\033[90m"
-
 # Helper functions for colored output
-error_print(msg) = println(stderr, "$(RED)$(BOLD)Error:$(RESET) $msg")
-info_print(msg) = println("$(BLUE)$(BOLD)Info:$(RESET) $msg")
-header_print(msg) = println("\n$(CYAN)$(BOLD)═══ $msg ═══$(RESET)")
-detail_print(msg) = println("$(GRAY)  $msg$(RESET)")
+function error_print(msg::AbstractString)
+    printstyled(stderr, "Error:", bold=true, color=:red)
+    println(stderr, " $msg")
+end
+
+function error_print(msg::AbstractString, highlight::AbstractString)
+    printstyled(stderr, "Error:", bold=true, color=:red)
+    print(stderr, " $msg ")
+    printstyled(stderr, highlight, bold=true)
+    println(stderr)
+end
+
+function info_print(msg::AbstractString)
+    printstyled("Info:", bold=true, color=:blue)
+    println(" $msg")
+end
+
+function info_print(msg::AbstractString, highlight::AbstractString)
+    printstyled("Info:", bold=true, color=:blue)
+    print(" $msg ")
+    printstyled(highlight, bold=true)
+    println()
+end
+
+function header_print(msg::AbstractString)
+    println()
+    printstyled("═══ $msg ═══", bold=true, color=:cyan)
+    println()
+end
+
+function detail_print(msg::AbstractString)
+    printstyled("  $msg", color=:light_black)
+    println()
+end
 
 function (@main)(args::Vector{String})
     if isempty(args)
@@ -66,7 +86,7 @@ function (@main)(args::Vector{String})
         elseif arg == "--verbose" || arg == "-v"
             verbose = true
         elseif startswith(arg, "-") && arg != "-"
-            error_print("Unknown option: $(BOLD)$arg$(RESET)")
+            error_print("Unknown option:", arg)
             detail_print("Run with --help to see available options")
             return 1
         else
@@ -101,8 +121,9 @@ function (@main)(args::Vector{String})
 end
 
 function print_usage()
+    printstyled("TestRunner", bold=true)
+    println(" - Julia test runner with selective execution")
     println("""
-    $(BOLD)TestRunner$(RESET) - Julia test runner with selective execution
 
     Usage:
       testrunner [options] <path> [patterns...]
@@ -154,12 +175,12 @@ function parse_pattern(pattern::String)
             start_line = tryparse(Int, parts[1])
             end_line = tryparse(Int, parts[2])
             if start_line === nothing || end_line === nothing
-                error_print("Invalid line range pattern: $(BOLD)$pattern$(RESET)")
+                error_print("Invalid line range pattern:", pattern)
                 detail_print("Expected format: L<start>:<end> where start and end are integers")
                 return nothing
             end
             if start_line > end_line
-                error_print("Invalid line range (start > end): $(BOLD)$pattern$(RESET)")
+                error_print("Invalid line range (start > end):", pattern)
                 detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
                 return nothing
             end
@@ -167,7 +188,7 @@ function parse_pattern(pattern::String)
         else
             line_num = tryparse(Int, line_spec)
             if line_num === nothing
-                error_print("Invalid line number pattern: $(BOLD)$pattern$(RESET)")
+                error_print("Invalid line number pattern:", pattern)
                 detail_print("Expected format: L<number> where number is an integer")
                 return nothing
             end
@@ -178,7 +199,7 @@ function parse_pattern(pattern::String)
         # Parse the expression - require parentheses
         expr_str = pattern[2:end]
         if !startswith(expr_str, "(") || !endswith(expr_str, ")")
-            error_print("Expression pattern must be surrounded by parentheses: $(BOLD)$pattern$(RESET)")
+            error_print("Expression pattern must be surrounded by parentheses:", pattern)
             detail_print("Expected format: :(expression)")
             detail_print("Example: :(@test foo(x) == y)")
             return nothing
@@ -189,17 +210,17 @@ function parse_pattern(pattern::String)
         try
             parsed = Meta.parse(inner_expr; filename="pattern")
             if isa(parsed, Expr) && parsed.head == :incomplete
-                error_print("Incomplete expression pattern: $(BOLD)$pattern$(RESET)")
+                error_print("Incomplete expression pattern:", pattern)
                 detail_print("The expression appears to be incomplete (missing closing parenthesis, etc.)")
                 return nothing
             end
             return parsed
         catch e
-            error_print("Invalid expression pattern: $(BOLD)$pattern$(RESET)")
+            error_print("Invalid expression pattern:", pattern)
             detail_print("Failed to parse Julia expression:")
-            print(stderr, "$(GRAY)  ")
+            printstyled(stderr, "  ", color=:light_black)
             Base.showerror(stderr, e)
-            println(stderr, "$(RESET)")
+            println(stderr)
             return nothing
         end
     # Regex pattern: r"pattern"
@@ -213,11 +234,11 @@ function parse_pattern(pattern::String)
         try
             return Regex(regex_content)
         catch e
-            error_print("Invalid regex pattern: $(BOLD)$pattern$(RESET)")
+            error_print("Invalid regex pattern:", pattern)
             detail_print("Failed to compile regular expression:")
-            print(stderr, "$(GRAY)  ")
+            printstyled(stderr, "  ", color=:light_black)
             Base.showerror(stderr, e)
-            println(stderr, "$(RESET)")
+            println(stderr)
             return nothing
         end
     # String pattern (default)
@@ -240,12 +261,12 @@ function parse_filter_lines(filter_str::String)
             start_line = tryparse(Int, strip(range_parts[1]))
             end_line = tryparse(Int, strip(range_parts[2]))
             if start_line === nothing || end_line === nothing
-                error_print("Invalid line range in filter: $(BOLD)$part$(RESET)")
+                error_print("Invalid line range in filter:", part)
                 detail_print("Expected format: <start>:<end> where start and end are integers")
                 return nothing
             end
             if start_line > end_line
-                error_print("Invalid line range (start > end) in filter: $(BOLD)$part$(RESET)")
+                error_print("Invalid line range (start > end) in filter:", part)
                 detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
                 return nothing
             end
@@ -256,7 +277,7 @@ function parse_filter_lines(filter_str::String)
             # Single line: 10
             line_num = tryparse(Int, part)
             if line_num === nothing
-                error_print("Invalid line number in filter: $(BOLD)$part$(RESET)")
+                error_print("Invalid line number in filter:", part)
                 detail_print("Expected an integer value")
                 return nothing
             end
@@ -314,7 +335,7 @@ end
 
 function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
     if !isfile(filepath)
-        error_print("File not found: $(BOLD)$filepath$(RESET)")
+        error_print("File not found:", filepath)
         return 1
     end
 
@@ -322,21 +343,26 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
     empty!(LOAD_PATH)
     push!(LOAD_PATH, "@", "@v$(VERSION.major).$(VERSION.minor)", "@stdlib")
 
+    if verbose
+        header_print("Test Setup")
+        info_print("Julia version:", string(VERSION))
+        info_print("Julia executable:", Sys.BINDIR)
+    end
+
     # Handle project activation
     if project !== nothing
         try
             project_path = parse_project_path(project, filepath)
             if verbose
-                header_print("Test Setup")
-                info_print("Activating project: $(BOLD)$project$(RESET)")
+                info_print("Active environment:", project)
                 detail_print("Project path: $project_path")
             end
             pushfirst!(LOAD_PATH, project_path)
         catch e
-            error_print("Failed to activate project: $(BOLD)$project$(RESET)")
-            print(stderr, "$(GRAY)  ")
+            error_print("Failed to activate project:", project)
+            printstyled(stderr, "  ", color=:light_black)
             Base.showerror(stderr, e)
-            println(stderr, "$(RESET)")
+            println(stderr)
             return 1
         end
     end
@@ -345,7 +371,7 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
 
     if verbose
         header_print("Test Configuration")
-        info_print("File: $(BOLD)$filepath$(RESET)")
+        info_print("File:", filepath)
 
         if !isempty(patterns)
             info_print("Patterns:")
