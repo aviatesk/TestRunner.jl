@@ -41,6 +41,17 @@ function detail_print(msg::AbstractString)
     println()
 end
 
+function error_detail_print(msg::AbstractString)
+    printstyled(stderr, "  $msg", color=:light_black)
+    println(stderr)
+end
+
+function show_error_trace(@nospecialize e)
+    error_detail_print("")
+    Base.showerror(stderr, e)
+    println(stderr)
+end
+
 function (@main)(args::Vector{String})
     if isempty(args)
         print_usage()
@@ -87,7 +98,7 @@ function (@main)(args::Vector{String})
             verbose = true
         elseif startswith(arg, "-") && arg != "-"
             error_print("Unknown option:", arg)
-            detail_print("Run with --help to see available options")
+            error_detail_print("Run with --help to see available options")
             return 1
         else
             # Not an option, it's either filepath or pattern
@@ -176,12 +187,12 @@ function parse_pattern(pattern::String)
             end_line = tryparse(Int, parts[2])
             if start_line === nothing || end_line === nothing
                 error_print("Invalid line range pattern:", pattern)
-                detail_print("Expected format: L<start>:<end> where start and end are integers")
+                error_detail_print("Expected format: L<start>:<end> where start and end are integers")
                 return nothing
             end
             if start_line > end_line
                 error_print("Invalid line range (start > end):", pattern)
-                detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
+                error_detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
                 return nothing
             end
             return start_line:end_line
@@ -189,7 +200,7 @@ function parse_pattern(pattern::String)
             line_num = tryparse(Int, line_spec)
             if line_num === nothing
                 error_print("Invalid line number pattern:", pattern)
-                detail_print("Expected format: L<number> where number is an integer")
+                error_detail_print("Expected format: L<number> where number is an integer")
                 return nothing
             end
             return line_num
@@ -200,8 +211,8 @@ function parse_pattern(pattern::String)
         expr_str = pattern[2:end]
         if !startswith(expr_str, "(") || !endswith(expr_str, ")")
             error_print("Expression pattern must be surrounded by parentheses:", pattern)
-            detail_print("Expected format: :(expression)")
-            detail_print("Example: :(@test foo(x) == y)")
+            error_detail_print("Expected format: :(expression)")
+            error_detail_print("Example: :(@test foo(x) == y)")
             return nothing
         end
 
@@ -211,16 +222,14 @@ function parse_pattern(pattern::String)
             parsed = Meta.parse(inner_expr; filename="pattern")
             if isa(parsed, Expr) && parsed.head == :incomplete
                 error_print("Incomplete expression pattern:", pattern)
-                detail_print("The expression appears to be incomplete (missing closing parenthesis, etc.)")
+                error_detail_print("The expression appears to be incomplete (missing closing parenthesis, etc.)")
                 return nothing
             end
             return parsed
         catch e
             error_print("Invalid expression pattern:", pattern)
-            detail_print("Failed to parse Julia expression:")
-            printstyled(stderr, "  ", color=:light_black)
-            Base.showerror(stderr, e)
-            println(stderr)
+            error_detail_print("Failed to parse Julia expression:")
+            show_error_trace(e)
             return nothing
         end
     # Regex pattern: r"pattern"
@@ -235,10 +244,8 @@ function parse_pattern(pattern::String)
             return Regex(regex_content)
         catch e
             error_print("Invalid regex pattern:", pattern)
-            detail_print("Failed to compile regular expression:")
-            printstyled(stderr, "  ", color=:light_black)
-            Base.showerror(stderr, e)
-            println(stderr)
+            error_detail_print("Failed to compile regular expression:")
+            show_error_trace(e)
             return nothing
         end
     # String pattern (default)
@@ -262,12 +269,12 @@ function parse_filter_lines(filter_str::String)
             end_line = tryparse(Int, strip(range_parts[2]))
             if start_line === nothing || end_line === nothing
                 error_print("Invalid line range in filter:", part)
-                detail_print("Expected format: <start>:<end> where start and end are integers")
+                error_detail_print("Expected format: <start>:<end> where start and end are integers")
                 return nothing
             end
             if start_line > end_line
                 error_print("Invalid line range (start > end) in filter:", part)
-                detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
+                error_detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
                 return nothing
             end
             for line in start_line:end_line
@@ -278,7 +285,7 @@ function parse_filter_lines(filter_str::String)
             line_num = tryparse(Int, part)
             if line_num === nothing
                 error_print("Invalid line number in filter:", part)
-                detail_print("Expected an integer value")
+                error_detail_print("Expected an integer value")
                 return nothing
             end
             push!(lines, line_num)
@@ -360,9 +367,7 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
             pushfirst!(LOAD_PATH, project_path)
         catch e
             error_print("Failed to activate project:", project)
-            printstyled(stderr, "  ", color=:light_black)
-            Base.showerror(stderr, e)
-            println(stderr)
+            show_error_trace(e)
             return 1
         end
     end
