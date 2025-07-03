@@ -318,6 +318,10 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
         return 1
     end
 
+    # Set `LOAD_PATH` manually: app shim sets limits it by default
+    empty!(LOAD_PATH)
+    push!(LOAD_PATH, "@", "@v$(VERSION.major).$(VERSION.minor)", "@stdlib")
+
     # Handle project activation
     if project !== nothing
         try
