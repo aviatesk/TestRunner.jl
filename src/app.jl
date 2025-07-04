@@ -4,6 +4,10 @@ module TestRunnerApp
 using Test: Test
 using MacroTools: MacroTools
 using ..TestRunner: runtest
+using JSON3: JSON3
+
+# to support precompilation
+const app_runner_module = Ref{Union{Module,Nothing}}(nothing)
 
 # Helper functions for colored output
 function error_print(msg::AbstractString)
@@ -52,6 +56,55 @@ function show_error_trace(@nospecialize e)
     println(stderr)
 end
 
+"""
+    TestRunnerDiagnostic
+
+Represents a single test diagnostic (failure or error) with minimal information
+needed for language server integration.
+
+# Fields
+- `filename::String`: Full path to the test file
+- `line::Int`: Line number where the test failed/errored (1-based)
+- `message::String`: Descriptive message including the original expression and error details
+"""
+struct TestRunnerDiagnostic
+    filename::String
+    line::Int
+    message::String
+end
+
+"""
+    TestRunnerStats
+
+Represents the statistical summary of a test run, including counts of different
+test outcomes and execution timing information.
+"""
+@kwdef struct TestRunnerStats
+    "Number of tests that passed"
+    n_passed::Int = 0
+    "Number of tests that failed"
+    n_failed::Int = 0
+    "Number of tests that errored"
+    n_errored::Int = 0
+    "Number of tests marked as broken"
+    n_broken::Int = 0
+    "Test execution time in seconds"
+    duration::Float64 = 0.0
+end
+
+"""
+    TestRunnerResult
+
+Represents the complete result of a test run in JSON format.
+"""
+@kwdef struct TestRunnerResult
+    filename::String
+    patterns::Union{Vector{Any}, Nothing} = nothing
+    stats::TestRunnerStats
+    logs::String = ""
+    diagnostics::Vector{TestRunnerDiagnostic} = TestRunnerDiagnostic[]
+end
+
 function (@main)(args::Vector{String})
     if isempty(args)
         print_usage()
@@ -64,12 +117,9 @@ function (@main)(args::Vector{String})
         return 0
     end
 
-    # Separate filepath, patterns, and options
-    filepath = nothing
     patterns = String[]
-    filter_lines = nothing
-    verbose = false
-    project = nothing
+    filename = filter_lines = project = nothing
+    verbose = json_output = false
 
     i = 1
     while i <= length(args)
@@ -96,14 +146,16 @@ function (@main)(args::Vector{String})
             project = "."
         elseif arg == "--verbose" || arg == "-v"
             verbose = true
+        elseif arg == "--json"
+            json_output = true
         elseif startswith(arg, "-") && arg != "-"
             error_print("Unknown option:", arg)
             error_detail_print("Run with --help to see available options")
             return 1
         else
-            # Not an option, it's either filepath or pattern
-            if filepath === nothing
-                filepath = arg
+            # Not an option, it's either filename or pattern
+            if filename === nothing
+                filename = arg
             else
                 push!(patterns, arg)
             end
@@ -111,8 +163,8 @@ function (@main)(args::Vector{String})
         i += 1
     end
 
-    # Check if filepath was provided
-    if filepath === nothing
+    # Check if filename was provided
+    if filename === nothing
         error_print("No file path provided")
         println()
         print_usage()
@@ -128,7 +180,7 @@ function (@main)(args::Vector{String})
     end
 
     # Run tests
-    return runtest_app(filepath, parsed_patterns, filter_lines, verbose, project)
+    return runtest_app(filename, parsed_patterns, filter_lines, verbose, project, json_output)
 end
 
 function print_usage()
@@ -151,6 +203,7 @@ function print_usage()
       --filter-lines=1,5,10:20  Filter to specific lines
       -f=1,5,10:20              Short form of --filter-lines
       --verbose, -v             Show verbose output
+      --json                    Output results in JSON format
       -h, --help                Show this help message
 
     Examples:
@@ -161,6 +214,7 @@ function print_usage()
       testrunner test/runtests.jl r"^test.*" --filter-lines=10:50
       testrunner test/runtests.jl --project=@. "my tests"
       testrunner test/runtests.jl --project=/path/to/project L10:20
+      testrunner test/runtests.jl --json
     """)
 end
 
@@ -294,13 +348,12 @@ function parse_filter_lines(filter_str::String)
     return lines
 end
 
-function parse_project_path(project::String, filepath::String)
+function parse_project_path(project::String, filename::String)
     if project == "@temp"
-        # Create temporary environment
         return mktempdir()
     elseif project == "@." || project == "."
         # Search for Project.toml in parent directories
-        dir = dirname(abspath(filepath))
+        dir = dirname(abspath(filename))
         while true
             if isfile(joinpath(dir, "Project.toml")) || isfile(joinpath(dir, "JuliaProject.toml"))
                 return dir
@@ -313,7 +366,7 @@ function parse_project_path(project::String, filepath::String)
         end
     elseif startswith(project, "@script")
         # Handle @script or @script<rel> format
-        scriptdir = dirname(abspath(filepath))
+        scriptdir = dirname(abspath(filename))
         if project == "@script"
             search_dir = scriptdir
         else
@@ -340,12 +393,35 @@ function parse_project_path(project::String, filepath::String)
     end
 end
 
-function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
-    if !isfile(filepath)
-        error_print("File not found:", filepath)
-        return 1
+function extract_test_stats_from_exception(ex::Test.TestSetException, duration::Float64)
+    return TestRunnerStats(;
+        n_passed = ex.pass,
+        n_failed = ex.fail,
+        n_errored = ex.error,
+        n_broken = ex.broken,
+        duration)
+end
+
+function extract_diagnostics_from_exception(ex::Test.TestSetException)
+    diagnostics = TestRunnerDiagnostic[]
+
+    for result in ex.errors_and_fails
+        source = result.source
+        filename = string(source.file)
+        line = source.line
+
+        io = IOBuffer()
+        show(io, result)
+        message = String(take!(io))
+
+        diagnostic = TestRunnerDiagnostic(filename, line, message)
+        push!(diagnostics, diagnostic)
     end
 
+    return diagnostics
+end
+
+function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
     # Set `LOAD_PATH` manually: app shim sets limits it by default
     empty!(LOAD_PATH)
     push!(LOAD_PATH, "@", "@v$(VERSION.major).$(VERSION.minor)", "@stdlib")
@@ -356,27 +432,20 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
         info_print("Julia executable:", Sys.BINDIR)
     end
 
-    # Handle project activation
     if project !== nothing
-        try
-            project_path = parse_project_path(project, filepath)
-            if verbose
-                info_print("Active environment:", project)
-                detail_print("Project path: $project_path")
-            end
-            pushfirst!(LOAD_PATH, project_path)
-        catch e
-            error_print("Failed to activate project:", project)
-            show_error_trace(e)
-            return 1
+        project_path = parse_project_path(project, filename)
+        if verbose
+            info_print("Active environment:", project)
+            detail_print("Project path: $project_path")
         end
+        pushfirst!(LOAD_PATH, project_path)
     end
 
-    filename = basename(filepath)
+    bname = basename(filename)
 
     if verbose
         header_print("Test Configuration")
-        info_print("File:", filepath)
+        info_print("File:", filename)
 
         if !isempty(patterns)
             info_print("Patterns:")
@@ -408,17 +477,64 @@ function runtest_app(filepath::String, patterns::Vector{Any}, filter_lines, verb
         header_print("Running Tests")
     end
 
+    topmodule = @something(app_runner_module[], Main)
+    if isempty(patterns)
+        return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
+    else
+        return Test.@testset "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
+    end
+end
+
+function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
+    # Redirect stdout to capture ALL output (including info_print, header_print, etc.)
+    original_stdout = stdout
+    (rd, wr) = redirect_stdout()
+
+    local stats::TestRunnerStats, diagnostics::Vector{TestRunnerDiagnostic}
+    start_time = time()
     try
-        if isempty(patterns)
-            # If both patterns and filter_lines are empty, just include the file
-            result = Test.@testset "$filename" verbose=verbose Main.include(filepath)
-        else
-            result = Test.@testset "$filename" verbose=verbose runtest(filepath, patterns; filter_lines)
-        end
+        result = runtest_internal(filename, patterns, filter_lines, verbose, project)
+        counts = Test.get_test_counts(result)
+        n_passed = counts.passes + counts.cumulative_passes
+        n_failed = counts.fails + counts.cumulative_fails
+        n_errored = counts.errors + counts.cumulative_errors
+        n_broken = counts.broken + counts.cumulative_broken
+        duration = result.time_end - result.time_start
+        stats = TestRunnerStats(; n_passed, n_failed, n_errored, n_broken, duration)
+        diagnostics = TestRunnerDiagnostic[]  # No diagnostics since all tests passed
         return 0
-    catch e
-        Base.display_error(e, catch_backtrace())
+    catch e # Any test failures/errors cause TestSetException to be thrown
+        e isa Test.TestSetException || rethrow(e)
+        duration = time() - start_time
+        stats = extract_test_stats_from_exception(e, duration)
+        diagnostics = extract_diagnostics_from_exception(e)
         return 1
+    finally
+        redirect_stdout(original_stdout)
+        close(wr)
+        logs = read(rd, String)
+        close(rd)
+        patterns = isempty(patterns) ? nothing : patterns
+        result = TestRunnerResult(;
+            filename,
+            patterns,
+            stats,
+            logs,
+            diagnostics)
+        JSON3.write(stdout, result)
+    end
+end
+
+function runtest_app(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project, json_output::Bool)
+    if !isfile(filename)
+        error_print("File not found:", filename)
+        return 1
+    end
+    if json_output
+        return runtest_json(filename, patterns, filter_lines, verbose, project)
+    else
+        runtest_internal(filename, patterns, filter_lines, verbose, project)
+        return 0
     end
 end
 

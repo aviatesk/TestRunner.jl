@@ -176,7 +176,7 @@ end
 
 function _selective_run(interp::TRInterpreter)
     filename = interp.filename
-    isfile(filename) || throw(SystemError(lazy"opening file \"$filename\""), 2, nothing)
+    isfile(filename) || throw(SystemError(lazy"opening file \"$filename\"", 2, nothing))
     toptext = read(filename, String)
     stream = JS.ParseStream(toptext)
     JS.parse!(stream; rule=:all)
@@ -531,7 +531,7 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
 end
 
 include("app.jl")
-using .TestRunnerApp: main
+using .TestRunnerApp: main, app_runner_module
 
 include("precompile.jl")
 

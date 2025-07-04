@@ -14,6 +14,8 @@ dependencies are executed.
 - **Fast execution**: Test code is interpreted only at top-level; function
   calls within tests are compiled normally while avoiding execution of unrelated
   test code
+- **JSON output**: Machine-readable test results with diagnostics for integration
+  with editors and CI systems
 
 ## Requirements
 
@@ -156,6 +158,9 @@ testrunner --project=/path/to/project mypkg/runtests.jl.jl "my tests"
 
 # Show help
 testrunner --help
+
+# Output results in JSON format
+testrunner --json mypkg/runtests.jl "my tests"
 ```
 
 Pattern formats:
@@ -169,6 +174,7 @@ Options:
 - `--project[=<dir>]` - Set project/environment (same format and meaning as Julia's `--project` flag)
 - `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
 - `--verbose` or `-v` - Show verbose output
+- `--json` - Output results in JSON format for machine-readable test results
 
 ## Examples
 
