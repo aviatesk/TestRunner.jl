@@ -423,8 +423,12 @@ end
 
 function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
     # Set `LOAD_PATH` manually: app shim sets limits it by default
-    empty!(LOAD_PATH)
-    push!(LOAD_PATH, "@", "@v$(VERSION.major).$(VERSION.minor)", "@stdlib")
+    if Base.should_use_main_entrypoint()
+        empty!(LOAD_PATH)
+        push!(LOAD_PATH, "@", "@v$(VERSION.major).$(VERSION.minor)", "@stdlib")
+    else
+        # for precompilation
+    end
 
     if verbose
         header_print("Test Setup")
