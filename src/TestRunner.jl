@@ -531,7 +531,7 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
 end
 
 include("app.jl")
-using .TestRunnerApp: main
+using .TestRunnerApp: main, app_runner_module
 
 include("precompile.jl")
 

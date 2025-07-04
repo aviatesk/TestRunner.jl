@@ -6,6 +6,9 @@ using MacroTools: MacroTools
 using ..TestRunner: runtest
 using JSON3: JSON3
 
+# to support precompilation
+const app_runner_module = Ref{Union{Module,Nothing}}(nothing)
+
 # Helper functions for colored output
 function error_print(msg::AbstractString)
     printstyled(stderr, "Error:", bold=true, color=:red)
@@ -473,11 +476,12 @@ function run_tests_internal(filename::String, patterns::Vector{Any}, filter_line
         header_print("Running Tests")
     end
 
+    topmodule = @something(app_runner_module[], Main)
     try
         if isempty(patterns)
-            return Test.@testset "$bname" verbose=verbose Main.include(filename)
+            return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
         else
-            return Test.@testset "$bname" verbose=verbose runtest(filename, patterns; filter_lines)
+            return Test.@testset "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
         end
     catch e
         if isa(e, Test.TestSetException)
