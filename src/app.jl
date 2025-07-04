@@ -74,9 +74,10 @@ struct TestRunnerDiagnostic
 end
 
 """
-    TestRunnerResult
+    TestRunnerStats
 
-TODO
+Represents the statistical summary of a test run, including counts of different
+test outcomes and execution timing information.
 """
 @kwdef struct TestRunnerStats
     "Number of tests that passed"
@@ -498,7 +499,7 @@ function runtest_app(filename::String, patterns::Vector{Any}, filter_lines, verb
         return 1
     end
 
-    rd, wr = nothing, nothing
+    rd = wr = nothing
     original_stdout = stdout
 
     try
