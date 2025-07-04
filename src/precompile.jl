@@ -25,17 +25,19 @@ module PrecompileModule10 end
         runtest(demo_file, ["inner tests 1"]; topmodule=PrecompileModule4);
         runtest(demo_file, [:(@test startswith(s_, prefix_))]; topmodule=PrecompileModule5);
 
-        main(String["--help"])
-        app_runner_module[] = PrecompileModule6
-        main(String[demo_file, "basic tests"]); # Run "basic tests" including @test_broken
-        app_runner_module[] = PrecompileModule7
-        main(String[demo_file, "--verbose", ":(@test process(s_) == n_)"]); # Run tests that call the process function
-        app_runner_module[] = PrecompileModule8
-        main(String[demo_file, "r\".*tests\""]);
-        app_runner_module[] = PrecompileModule9
-        main(String[demo_file, "--json", "inner tests 1"]);
-        app_runner_module[] = PrecompileModule10
-        main(String[demo_file, ":(@test startswith(s_, prefix_))", "--filter-lines=43"]);
+        if Base.JLOptions().code_coverage == 0 && Base.JLOptions().malloc_log == 0
+            main(String["--help"])
+            app_runner_module[] = PrecompileModule6
+            main(String[demo_file, "basic tests"]); # Run "basic tests" including @test_broken
+            app_runner_module[] = PrecompileModule7
+            main(String[demo_file, "--verbose", ":(@test process(s_) == n_)"]); # Run tests that call the process function
+            app_runner_module[] = PrecompileModule8
+            main(String[demo_file, "r\".*tests\""]);
+            app_runner_module[] = PrecompileModule9
+            main(String[demo_file, "--json", "inner tests 1"]);
+            app_runner_module[] = PrecompileModule10
+            main(String[demo_file, ":(@test startswith(s_, prefix_))", "--filter-lines=43"]);
+        end
     end
     app_runner_module[] = nothing
 end
