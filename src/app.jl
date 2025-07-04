@@ -421,7 +421,7 @@ function extract_diagnostics_from_exception(ex::Test.TestSetException)
     return diagnostics
 end
 
-function run_tests_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
+function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
     # Set `LOAD_PATH` manually: app shim sets limits it by default
     empty!(LOAD_PATH)
     push!(LOAD_PATH, "@", "@v$(VERSION.major).$(VERSION.minor)", "@stdlib")
@@ -478,18 +478,50 @@ function run_tests_internal(filename::String, patterns::Vector{Any}, filter_line
     end
 
     topmodule = @something(app_runner_module[], Main)
+    if isempty(patterns)
+        return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
+    else
+        return Test.@testset "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
+    end
+end
+
+function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
+    # Redirect stdout to capture ALL output (including info_print, header_print, etc.)
+    original_stdout = stdout
+    (rd, wr) = redirect_stdout()
+
+    local stats::TestRunnerStats, diagnostics::Vector{TestRunnerDiagnostic}
+    start_time = time()
     try
-        if isempty(patterns)
-            return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
-        else
-            return Test.@testset "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
-        end
-    catch e
-        if isa(e, Test.TestSetException)
-            return e
-        else
-            rethrow(e)
-        end
+        result = runtest_internal(filename, patterns, filter_lines, verbose, project)
+        counts = Test.get_test_counts(result)
+        n_passed = counts.passes + counts.cumulative_passes
+        n_failed = counts.fails + counts.cumulative_fails
+        n_errored = counts.errors + counts.cumulative_errors
+        n_broken = counts.broken + counts.cumulative_broken
+        duration = result.time_end - result.time_start
+        stats = TestRunnerStats(; n_passed, n_failed, n_errored, n_broken, duration)
+        diagnostics = TestRunnerDiagnostic[]  # No diagnostics since all tests passed
+        return 0
+    catch e # Any test failures/errors cause TestSetException to be thrown
+        e isa Test.TestSetException || rethrow(e)
+        duration = time() - start_time
+        stats = extract_test_stats_from_exception(e, duration)
+        diagnostics = extract_diagnostics_from_exception(e)
+        return 1
+    finally
+        redirect_stdout(original_stdout)
+        close(wr)
+        logs = read(rd, String)
+        close(rd)
+        patterns = isempty(patterns) ? nothing : patterns
+        result = TestRunnerResult(;
+            filename,
+            patterns,
+            stats,
+            logs,
+            diagnostics)
+        JSON3.write(stdout, result)
     end
 end
 
@@ -498,67 +530,11 @@ function runtest_app(filename::String, patterns::Vector{Any}, filter_lines, verb
         error_print("File not found:", filename)
         return 1
     end
-
-    rd = wr = nothing
-    original_stdout = stdout
-
-    try
-        if json_output
-            # Redirect stdout to capture ALL output (including info_print, header_print, etc.)
-            (rd, wr) = redirect_stdout()
-        end
-
-        # Now run the actual test logic
-        start_time = time()
-        result = run_tests_internal(filename, patterns, filter_lines, verbose, project)
-
-        # Extract and report results
-        # Note: DefaultTestSet is only returned when ALL tests pass
-        # Any failures/errors cause TestSetException to be thrown
-        if isa(result, Test.DefaultTestSet)
-            counts = Test.get_test_counts(result)
-            n_passed = counts.passes + counts.cumulative_passes
-            n_failed = counts.fails + counts.cumulative_fails
-            n_errored = counts.errors + counts.cumulative_errors
-            n_broken = counts.broken + counts.cumulative_broken
-            duration = result.time_end - result.time_start
-            stats = TestRunnerStats(; n_passed, n_failed, n_errored, n_broken, duration)
-            diagnostics = TestRunnerDiagnostic[]  # No diagnostics since all tests passed
-            exit_code = 0
-        else
-            @assert result isa Test.TestSetException "result::Test.TestSetException"
-            duration = time() - start_time
-            stats = extract_test_stats_from_exception(result, duration)
-            diagnostics = extract_diagnostics_from_exception(result)
-            exit_code = 1
-        end
-
-        if json_output
-            redirect_stdout(original_stdout)
-            close(wr)
-            logs = read(rd, String)
-            close(rd)
-            patterns = isempty(patterns) ? nothing : patterns
-            result = TestRunnerResult(;
-                filename,
-                patterns,
-                stats,
-                logs,
-                diagnostics)
-            JSON3.write(stdout, result)
-        end
-        return exit_code
-    catch e
-        if json_output
-            try
-                redirect_stdout(original_stdout)
-                wr !== nothing && close(wr)
-                rd !== nothing && close(rd)
-            catch
-            end
-        end
-        Base.display_error(e, catch_backtrace())
-        return 1
+    if json_output
+        return runtest_json(filename, patterns, filter_lines, verbose, project)
+    else
+        runtest_internal(filename, patterns, filter_lines, verbose, project)
+        return 0
     end
 end
 
