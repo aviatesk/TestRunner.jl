@@ -24,17 +24,18 @@ dependencies are executed.
 ## Installation
 
 ```julia-repl
-pkg> add /path/to/TestRunner
+pkg> add https://github.com/aviatesk/TestRunner.jl
 ```
 
 TestRunner can also be installed as a standalone Julia application:
 
 ```julia-repl
-pkg> app add /path/to/TestRunner
+pkg> app add https://github.com/aviatesk/TestRunner.jl
 ```
 
+This will install the `testrunner` executable.
 Note that you need to manually make `~/.julia/bin` available on the `PATH`
-environment for Julia app to be accessible.
+environment for the executable to be accessible.
 See <https://pkgdocs.julialang.org/dev/apps/> for the details.
 
 ### Quick Start
