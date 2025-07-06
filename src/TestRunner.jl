@@ -482,7 +482,8 @@ function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, call_expr::Ex
     pc = frame.pc
     ret = JI.bypass_builtins(interp, frame, call_expr, pc)
     isa(ret, Some{Any}) && return ret.value
-    ret = JI.maybe_evaluate_builtin(interp, frame, call_expr, false)
+    # NOTE `JI.maybe_evaluate_builtin` may call `Core._apply_iterate`, which may result in world age error otherwise
+    ret = @invokelatest JI.maybe_evaluate_builtin(interp, frame, call_expr, false)
     isa(ret, Some{Any}) && return ret.value
     fargs = JI.collect_args(interp, frame, call_expr)
     return JI.evaluate_call!(interp, frame, fargs, enter_generated)

@@ -218,4 +218,11 @@ module RunTestsModule3 end
     end
 end
 
+module WorldAgeTest end
+@testset "world age issue" begin
+    testfile = joinpath(@__DIR__, "testfile_world_age.jl")
+    result = @testset "test world age" runtest(testfile, [":(@inferred funcsin(Ref{Any}(42)))"]; topmodule=WorldAgeTest)
+    @test true # no exception should be thrown
+end
+
 end # module test_runtest
