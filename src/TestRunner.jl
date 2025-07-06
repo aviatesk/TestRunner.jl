@@ -335,14 +335,15 @@ end
 
 function is_testset_or_test(@nospecialize expr)
     # Check if expression is a test-related macro call
-    return MacroTools.@capture(expr, @testset(xs__)) ||
+    return MacroTools.@capture(expr, @inferred(xs__)) ||
            MacroTools.@capture(expr, @test(xs__)) ||
            MacroTools.@capture(expr, @test_broken(xs__)) ||
-           MacroTools.@capture(expr, @test_throws(xs__)) ||
-           MacroTools.@capture(expr, @test_warn(xs__)) ||
+           MacroTools.@capture(expr, @test_deprecated(xs__)) ||
            MacroTools.@capture(expr, @test_logs(xs__)) ||
+           MacroTools.@capture(expr, @test_warn(xs__)) ||
            MacroTools.@capture(expr, @test_skip(xs__)) ||
-           MacroTools.@capture(expr, @test_deprecated(xs__))
+           MacroTools.@capture(expr, @test_throws(xs__)) ||
+           MacroTools.@capture(expr, @testset(xs__))
 end
 
 function is_important(@nospecialize expr)
