@@ -39,7 +39,7 @@ environment for the executable to be accessible.
 See <https://pkgdocs.julialang.org/dev/apps/> for the details.
 
 ### Quick Start
-```julia
+```julia-repl
 julia> using TestRunner
 
 julia> runtest("demo.jl", ["basic tests"]) # Run tests matching a specific testset name
