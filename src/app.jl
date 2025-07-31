@@ -3,8 +3,10 @@ module TestRunnerApp
 # Import necessary modules
 using Test: Test
 using MacroTools: MacroTools
-using ..TestRunner: runtest
+using ..TestRunner: TestRunnerTestSet, runtest, errors_and_fails
 using JSON3: JSON3
+
+include("testrunner-types.jl")
 
 # to support precompilation
 const app_runner_module = Ref{Union{Module,Nothing}}(nothing)
@@ -54,55 +56,6 @@ function show_error_trace(@nospecialize e)
     error_detail_print("")
     Base.showerror(stderr, e)
     println(stderr)
-end
-
-"""
-    TestRunnerDiagnostic
-
-Represents a single test diagnostic (failure or error) with minimal information
-needed for language server integration.
-
-# Fields
-- `filename::String`: Full path to the test file
-- `line::Int`: Line number where the test failed/errored (1-based)
-- `message::String`: Descriptive message including the original expression and error details
-"""
-struct TestRunnerDiagnostic
-    filename::String
-    line::Int
-    message::String
-end
-
-"""
-    TestRunnerStats
-
-Represents the statistical summary of a test run, including counts of different
-test outcomes and execution timing information.
-"""
-@kwdef struct TestRunnerStats
-    "Number of tests that passed"
-    n_passed::Int = 0
-    "Number of tests that failed"
-    n_failed::Int = 0
-    "Number of tests that errored"
-    n_errored::Int = 0
-    "Number of tests marked as broken"
-    n_broken::Int = 0
-    "Test execution time in seconds"
-    duration::Float64 = 0.0
-end
-
-"""
-    TestRunnerResult
-
-Represents the complete result of a test run in JSON format.
-"""
-@kwdef struct TestRunnerResult
-    filename::String
-    patterns::Union{Vector{Any}, Nothing} = nothing
-    stats::TestRunnerStats
-    logs::String = ""
-    diagnostics::Vector{TestRunnerDiagnostic} = TestRunnerDiagnostic[]
 end
 
 function (@main)(args::Vector{String})
@@ -221,12 +174,8 @@ end
 function parse_patterns(patterns::Vector{String})
     parsed = Any[]
     for pattern in patterns
-        result = parse_pattern(pattern)
-        if result === nothing
-            # Invalid pattern, return nothing to indicate failure
-            return nothing
-        end
-        push!(parsed, result)
+        pat = @something parse_pattern(pattern) return nothing # Invalid pattern, return nothing to indicate failure
+        push!(parsed, pat)
     end
     return parsed
 end
@@ -251,8 +200,7 @@ function parse_pattern(pattern::String)
             end
             return start_line:end_line
         else
-            line_num = tryparse(Int, line_spec)
-            if line_num === nothing
+            line_num = @something tryparse(Int, line_spec) begin
                 error_print("Invalid line number pattern:", pattern)
                 error_detail_print("Expected format: L<number> where number is an integer")
                 return nothing
@@ -336,8 +284,7 @@ function parse_filter_lines(filter_str::String)
             end
         else
             # Single line: 10
-            line_num = tryparse(Int, part)
-            if line_num === nothing
+            line_num = @something tryparse(Int, part) begin
                 error_print("Invalid line number in filter:", part)
                 error_detail_print("Expected an integer value")
                 return nothing
@@ -409,12 +356,30 @@ function extract_diagnostics_from_exception(ex::Test.TestSetException)
         source = result.source
         filename = string(source.file)
         line = source.line
-
-        io = IOBuffer()
-        show(io, result)
-        message = String(take!(io))
-
-        diagnostic = TestRunnerDiagnostic(filename, line, message)
+        relatedInformation = nothing
+        if haskey(errors_and_fails, result)
+            excs = errors_and_fails[result]
+            if !isempty(excs)
+                exc = first(excs)
+                if hasproperty(exc, :backtrace)
+                    st = stacktrace(exc.backtrace)
+                    relatedInformation = TestRunnerDiagnosticRelatedInformation[]
+                    for sf in st
+                        linfo = sf.linfo
+                        if linfo isa Core.CodeInstance
+                            linfo = linfo.def
+                        end
+                        local message = linfo isa Core.MethodInstance ?
+                            sprint(Base.show_tuple_as_call, Symbol(""), linfo.specTypes) :
+                            string(sf.func)
+                        push!(relatedInformation, TestRunnerDiagnosticRelatedInformation(
+                            string(sf.file), sf.line, message))
+                    end
+                end
+            end
+        end
+        message = sprint(show, result)
+        diagnostic = TestRunnerDiagnostic(filename, line, message, relatedInformation)
         push!(diagnostics, diagnostic)
     end
 
@@ -481,11 +446,11 @@ function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines,
         header_print("Running Tests")
     end
 
-    topmodule = @something(app_runner_module[], Main)
+    topmodule = @something app_runner_module[] Main
     if isempty(patterns)
         return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
     else
-        return Test.@testset "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
+        return Test.@testset TestRunnerTestSet "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
     end
 end
 
@@ -494,7 +459,8 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
     original_stdout = stdout
     (rd, wr) = redirect_stdout()
 
-    local stats::TestRunnerStats, diagnostics::Vector{TestRunnerDiagnostic}
+    local stats::TestRunnerStats = TestRunnerStats()
+    local diagnostics::Vector{TestRunnerDiagnostic} = TestRunnerDiagnostic[]
     start_time = time()
     try
         result = runtest_internal(filename, patterns, filter_lines, verbose, project)
@@ -505,7 +471,6 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
         n_broken = counts.broken + counts.cumulative_broken
         duration = result.time_end - result.time_start
         stats = TestRunnerStats(; n_passed, n_failed, n_errored, n_broken, duration)
-        diagnostics = TestRunnerDiagnostic[]  # No diagnostics since all tests passed
         return 0
     catch e # Any test failures/errors cause TestSetException to be thrown
         e isa Test.TestSetException || rethrow(e)

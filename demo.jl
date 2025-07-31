@@ -60,3 +60,22 @@ end
 # More standalone tests
 @test 100 - 50 == 50  # line 61
 @test sqrt(16) == 4   # line 62
+
+# Error cases
+# ===========
+
+@testset "Test failure" begin
+    @test sin(0) == π
+end
+
+@testset "Exception inside of `@test`" begin
+    @test sin(Inf) == π
+    @test sin(0) == 0
+    @test cos(Inf) == π
+end
+
+@testset "Exception outside of `@test`" begin
+    v = sin(Inf)
+    @test v == π
+    @test @isdefined v # not executed
+end
