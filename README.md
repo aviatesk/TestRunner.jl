@@ -349,7 +349,6 @@ Mixed patterns      |    4      4  0.0s
 When tests fail or encounter errors, TestRunner provides enhanced debugging
 capabilities through its custom `TestRunnerTestSet` type. This section explains
 how different types of test failures are handled and reported.
-
 Let's compare how different types of test failures are reported with and without
 `TestRunnerTestSet`:
 
@@ -357,7 +356,7 @@ Let's compare how different types of test failures are reported with and without
 For simple assertion failures, there's no difference between the two approaches.
 Both provide the full interpreter stacktrace.
 
-**Standard `@testset`:**
+**With `Test.DefaultTestSet`:**
 ```julia-repl
 julia> @testset verbose=true runtest("demo.jl", ["Test failure"]);
 Test failure: Test Failed at demo.jl:68
@@ -387,7 +386,7 @@ Stacktrace:
 When an exception occurs within a `@test` expression, full exception information
 is only available with `TestRunnerTestSet`.
 
-**Standard `@testset`:**
+**With `Test.DefaultTestSet`:**
 ```julia-repl
 julia> @testset verbose=true runtest("demo.jl", ["Exception inside of `@test`"]);
 Exception inside of `@test`: Error During Test at demo.jl:72
@@ -432,7 +431,7 @@ Exception inside of `@test`: Error During Test at demo.jl:74
 When an exception occurs outside of a `@test` macro (preventing subsequent tests
 from running), full exception information is available only with `TestRunnerTestSet`:
 
-**Standard `@testset`:**
+**With `Test.DefaultTestSet`:**
 ```julia-repl
 julia> @testset verbose=true runtest("demo.jl", ["Exception outside of `@test`"]);
 Exception outside of `@test`: Error During Test at demo.jl:77
