@@ -1,6 +1,6 @@
 module TestRunner
 
-export runtest, runtests
+export runtest, runtests, TestRunnerTestSet
 
 using Core.IR
 using Compiler: Compiler as CC
@@ -8,6 +8,10 @@ using JuliaInterpreter: JuliaInterpreter as JI
 using LoweredCodeUtils: LoweredCodeUtils as LCU
 using JuliaSyntax: JuliaSyntax as JS
 using MacroTools: MacroTools
+using Test: Test
+
+const BacktraceElm = Union{Ptr{Nothing},Base.InterpreterIP}
+const ExceptionFrame = @NamedTuple{exception::Any,backtrace::Vector{BacktraceElm}}
 
 struct TRInterpreter <: JI.Interpreter
     # constant across execution
@@ -16,14 +20,22 @@ struct TRInterpreter <: JI.Interpreter
     # constant across per-file execution
     filename::String # absolute path
     context::Module
+    current_exceptions::Vector{ExceptionFrame}
 end
 function TRInterpreter(interp::TRInterpreter;
                        patterns::Dict{String,Vector{Any}} = interp.patterns,
                        filter_lines::Dict{String,Set{Int}} = interp.filter_lines,
                        filename::String = interp.filename,
-                       context::Module = interp.context)
-    return TRInterpreter(patterns, filter_lines, filename, context)
+                       context::Module = interp.context,
+                       current_exceptions::Vector{ExceptionFrame} = interp.current_exceptions)
+    return TRInterpreter(patterns, filter_lines, filename, context, current_exceptions)
 end
+
+global current_interpreter::TRInterpreter
+
+const errors_and_fails = Dict{Union{Test.Error,Test.Fail},Vector{Any}}()
+
+include("TestRunnerTestSet.jl")
 
 """
     runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
@@ -89,7 +101,9 @@ function runtest(filename::AbstractString, patterns;
     else
         filter_lines = Dict{String,Set{Int}}(filepath => Set{Int}(filter_lines))
     end
-    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule)
+    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
+    global current_interpreter = interp
+    empty!(errors_and_fails)
     _selective_run(interp)
 end
 
@@ -170,7 +184,9 @@ function runtests(entryfilename::AbstractString, patterns_for_files;
         end
     end
     filepath = abspath(entryfilename)
-    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule)
+    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
+    global current_interpreter = interp
+    empty!(errors_and_fails)
     _selective_run(interp)
 end
 
@@ -346,14 +362,6 @@ function is_testset_or_test(@nospecialize expr)
            MacroTools.@capture(expr, @testset(xs__))
 end
 
-function is_important(@nospecialize expr)
-    Meta.isexpr(expr, (:using, :import)) && return true
-    Base.is_function_def(expr) && return true
-    Meta.isexpr(expr, :struct) && return true
-    MacroTools.@capture(expr, include(xs__)) && return true
-    return false
-end
-
 function select_statements!(interp::TRInterpreter, concretized::BitVector, src::CodeInfo, mod::Module, lines::Set{Int})
     cl = LCU.CodeLinks(mod, src)
     edges = LCU.CodeEdges(src, cl)
@@ -386,7 +394,6 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
     changed = true
     while changed
         changed = false
-
         changed |= LCU.add_ssa_preds!(concretized, src, edges, ())
         changed |= add_ssas_uses!(concretized, ssavalue_uses)
         changed |= add_slot_deps!(concretized, cl)
@@ -530,6 +537,39 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
     included_file = normpath(dirname(interp.filename), fname)
     newinterp = TRInterpreter(interp; filename=included_file, context=include_context)
     _selective_run(newinterp)
+end
+
+function JI.handle_err(interp::TRInterpreter, frame::JI.Frame, @nospecialize(err))
+    excs = map(current_exceptions()) do exc
+        ExceptionFrame((exc.exception, exc.backtrace))
+    end
+    append!(interp.current_exceptions, scrub_exc_stack(excs))
+    return @invoke JI.handle_err(interp::JI.Interpreter, frame::JI.Frame, err::Any)
+end
+
+const JULIAINTERPRETER_INTERPRET_FILE = let
+    jlfile = pathof(JI)::String
+    Symbol(normpath(jlfile, "..", "interpret.jl"))
+end
+
+function scrub_backtrace(bt::Vector{BacktraceElm})
+    runtest_idx = @something let
+            findfirst(ip::BacktraceElm ->
+                Test.ip_has_file_and_func(ip, @__FILE__, (:runtest, :runtests)), bt)
+        end return bt
+    internal_idx = @something let
+            findfirst(ip::BacktraceElm ->
+                Test.ip_has_file_and_func(ip, @__FILE__, (:evaluate_call!,)), bt)
+        end let
+            findfirst(ip::BacktraceElm ->
+                Test.ip_has_file_and_func(ip, JULIAINTERPRETER_INTERPRET_FILE, (:step_expr!,:eval_rhs,)), bt)
+        end return bt
+    internal_idx < runtest_idx || return bt
+    return append!(bt[1:internal_idx-1], bt[runtest_idx:end])
+end
+
+function scrub_exc_stack(excs::Vector{ExceptionFrame})
+    return ExceptionFrame[ ExceptionFrame((exc, scrub_backtrace(bt))) for (exc, bt) in excs ]
 end
 
 include("app.jl")

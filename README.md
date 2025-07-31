@@ -38,7 +38,7 @@ Note that you need to manually make `~/.julia/bin` available on the `PATH`
 environment for the executable to be accessible.
 See <https://pkgdocs.julialang.org/dev/apps/> for the details.
 
-### Quick Start
+## Quick Start
 ```julia-repl
 julia> using TestRunner
 
@@ -60,9 +60,7 @@ $ testrunner demo.jl '(:(@test startswith(inner_func2(), "inner")))'
 
 ## Programmatic Usage
 
-### API
-
-#### `runtest`
+### `runtest`
 
 ```julia
 runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
@@ -84,7 +82,11 @@ specified lines.
 **Returns:**
 - Test results from the selectively executed tests
 
-#### `runtests`
+### `runtests`
+
+```julia
+runtests(entryfilename::AbstractString, patterns; filter_lines=nothing, topmodule::Module=Main)
+```
 
 The package also provides a `runtests` function for advanced use cases like
 selectively running package test cases from `test/runtests.jl`, where
@@ -92,29 +94,50 @@ you need to specify different patterns for different files in a test suite
 that includes multiple files via `include` statements.
 See its docstring for detailed usage.
 
-### Pattern Types
+### `TestRunnerTestSet`
 
-#### String Patterns
+Since `runtest` and `runtests` execute Test.jl code using JuliaInterpreter,
+they cannot directly utilize the test failure handling provided by Test.jl.
+
+Therefore, this package implements a custom `@testset` type called `TestRunnerTestSet`.
+When `runtest[s]` is executed within `@testset TestRunnerTestSet`,
+you get equivalent test failure handling to Test.jl.
+For programmatic usage, it can be used specifically in the following way:
+```julia
+using Test, TestRunner
+@testset TestRunnerTestSet runtest("mytest.jl", ["my tests"])
+```
+
+**It is recommended to always use `runtest[s]` together with `@testset TestRunnerTestSet` as shown above.**
+
+`TestRunnerTestSet` is automatically used in the [`testrunner` app](#app-usage).
+
+See the [Test Failure/Error Handling](#test-failureerror-handling) section for
+detailed comparisons showing how different types of failures are reported.
+
+## Pattern Types
+
+### String Patterns
 Match testsets by exact name:
 ```julia
 # Match a testset by name
 runtest("demo.jl", ["struct tests"])  # matches any testset whose name is "struct tests"
 ```
 
-#### Regex Patterns
+### Regex Patterns
 Match testsets using regular expressions:
 ```julia
 runtest("demo.jl", [r"foo"])  # matches any testset containing "foo"
 ```
 
-#### Expression Patterns
+### Expression Patterns
 Match arbitrary Julia expressions using MacroTools patterns:
 ```julia
 runtest("demo.jl", [:(@test startswith(s_, prefix_))])  # matches e.g. `@test startswith(s, "Julia")`
 runtest("demo.jl", [:(@test a_ > b_)])                  # matches e.g. `@test x > 0`
 ```
 
-#### Line Number Patterns
+### Line Number Patterns
 Directly specify line numbers or ranges to execute:
 ```julia
 # Run code on specific lines
@@ -237,6 +260,22 @@ end
 # More standalone tests
 @test 100 - 50 == 50  # line 61
 @test sqrt(16) == 4    # line 62
+
+@testset "Test failure" begin
+    @test sin(0) == π
+end
+
+@testset "Exception inside of `@test`" begin
+    @test sin(Inf) == π
+    @test sin(0) == 0
+    @test cos(Inf) == π
+end
+
+@testset "Exception outside of `@test`" begin
+    v = sin(Inf)
+    @test v == π
+    @test @isdefined v # not executed
+end
 ```
 
 ```julia-repl
@@ -304,6 +343,116 @@ Mixed patterns      |    4      4  0.0s
 > Note that the `@testset "xxx runner" verbose=true` part is used only to show
 > the test results in an organized way and is not required for TestRunner
 > functionality itself.
+
+### Test Failure/Error Handling
+
+When tests fail or encounter errors, TestRunner provides enhanced debugging
+capabilities through its custom `TestRunnerTestSet` type. This section explains
+how different types of test failures are handled and reported.
+
+Let's compare how different types of test failures are reported with and without
+`TestRunnerTestSet`:
+
+#### 1. Test Failure
+For simple assertion failures, there's no difference between the two approaches.
+Both provide the full interpreter stacktrace.
+
+**Standard `@testset`:**
+```julia-repl
+julia> @testset verbose=true runtest("demo.jl", ["Test failure"]);
+Test failure: Test Failed at demo.jl:68
+  Expression: sin(0) == π
+   Evaluated: 0.0 == π
+
+Stacktrace:
+  [1] evaluate_call!(interp::TestRunner.TRInterpreter, frame::JuliaInterpreter.Frame, fargs::Vector{Any}, ::Bool)
+    @ TestRunner ~/julia/packages/TestRunner/src/TestRunner.jl:515
+  ...
+```
+
+**With `TestRunnerTestSet`:**
+```julia-repl
+julia> @testset TestRunnerTestSet verbose=true runtest("demo.jl", ["Test failure"]);
+Test failure: Test Failed at demo.jl:68
+  Expression: sin(0) == π
+   Evaluated: 0.0 == π
+
+Stacktrace:
+  [1] evaluate_call!(interp::TestRunner.TRInterpreter, frame::JuliaInterpreter.Frame, fargs::Vector{Any}, ::Bool)
+    @ TestRunner ~/julia/packages/TestRunner/src/TestRunner.jl:515
+  ...
+```
+
+#### 2. Exception Inside `@test`
+When an exception occurs within a `@test` expression, full exception information
+is only available with `TestRunnerTestSet`.
+
+**Standard `@testset`:**
+```julia-repl
+julia> @testset verbose=true runtest("demo.jl", ["Exception inside of `@test`"]);
+Exception inside of `@test`: Error During Test at demo.jl:72
+  Test threw exception
+  Expression: sin(Inf) == π
+
+Exception inside of `@test`: Error During Test at demo.jl:74
+  Test threw exception
+  Expression: cos(Inf) == π
+```
+
+**With `TestRunnerTestSet`:**
+```julia-repl
+julia> @testset TestRunnerTestSet verbose=true runtest("demo.jl", ["Exception inside of `@test`"]);
+Exception inside of `@test`: Error During Test at demo.jl:72
+  Test threw exception
+  Expression: sin(Inf) == π
+  DomainError with Inf:
+  sin(x) is only defined for finite x.
+  Stacktrace:
+    [1] sin_domain_error(x::Float64)
+      @ Base.Math ./special/trig.jl:28
+    [2] sin(x::Float64)
+      @ Base.Math ./special/trig.jl:39
+    ...
+
+Exception inside of `@test`: Error During Test at demo.jl:74
+  Test threw exception
+  Expression: cos(Inf) == π
+  DomainError with Inf:
+  cos(x) is only defined for finite x.
+  Stacktrace:
+    [1] cos_domain_error(x::Float64)
+      @ Base.Math ./special/trig.jl:97
+    [2] cos(x::Float64)
+      @ Base.Math ./special/trig.jl:108
+    ...
+```
+
+#### 3. Exception Outside `@test`
+
+When an exception occurs outside of a `@test` macro (preventing subsequent tests
+from running), full exception information is available only with `TestRunnerTestSet`:
+
+**Standard `@testset`:**
+```julia-repl
+julia> @testset verbose=true runtest("demo.jl", ["Exception outside of `@test`"]);
+Exception outside of `@test`: Error During Test at demo.jl:77
+  Got exception outside of a @test
+```
+
+**With `TestRunnerTestSet`:**
+```julia-repl
+julia> @testset TestRunnerTestSet verbose=true runtest("demo.jl", ["Exception outside of `@test`"]);
+Exception outside of `@test`: Error During Test at demo.jl:77
+  Got exception outside of a @test
+  DomainError with Inf:
+  sin(x) is only defined for finite x.
+  Stacktrace:
+    [1] sin_domain_error(x::Float64)
+      @ Base.Math ./special/trig.jl:28
+    [2] sin(x::Float64)
+      @ Base.Math ./special/trig.jl:39
+    ...
+```
 
 ## How It Works
 
