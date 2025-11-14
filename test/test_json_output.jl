@@ -1,7 +1,7 @@
 module test_json_output
 
 using Test
-using JSON3
+using JSON: JSON
 using TestRunner
 using TestRunner.TestRunnerApp: TestRunnerResult, TestRunnerStats
 
@@ -60,7 +60,7 @@ with_simple_passing_test_file() do testfile
     result = run_testrunner_process(["--json", testfile])
     @test result.exitcode == 0
     @test isempty(result.stderr)
-    json_result = JSON3.read(result.stdout, TestRunnerResult)
+    json_result = JSON.parse(result.stdout, TestRunnerResult)
     stats = json_result.stats
     @test stats.n_passed == 1
     @test stats.n_failed == stats.n_errored == stats.n_broken == 0
@@ -88,7 +88,7 @@ with_simple_passing_test_file() do testfile
     result = run_testrunner_process(["--json", testfile, "simple test"])
     @test result.exitcode == 0
     @test isempty(result.stderr)
-    json_result = JSON3.read(result.stdout, TestRunnerResult)
+    json_result = JSON.parse(result.stdout, TestRunnerResult)
     @test json_result.patterns == ["simple test"]
     stats = json_result.stats
     @test stats.n_passed == 1
@@ -99,7 +99,7 @@ end
 
 with_simple_passing_test_file() do testfile
     result = run_testrunner_process(["--json", "--verbose", testfile])
-    json_result = JSON3.read(result.stdout, TestRunnerResult)
+    json_result = JSON.parse(result.stdout, TestRunnerResult)
     @test occursin("Test Setup", json_result.logs)
     @test occursin("Julia version", json_result.logs)
     @test occursin("Test Configuration", json_result.logs)
@@ -110,7 +110,7 @@ with_failing_test_file() do testfile
     result = run_testrunner_process(["--json", testfile])
     @test result.exitcode == 1
     @test isempty(result.stderr)
-    json_result = JSON3.read(result.stdout, TestRunnerResult)
+    json_result = JSON.parse(result.stdout, TestRunnerResult)
     stats = json_result.stats
     @test stats.n_failed == 1
     @test stats.n_passed == stats.n_errored == stats.n_broken == 0
