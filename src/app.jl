@@ -4,7 +4,7 @@ module TestRunnerApp
 using Test: Test
 using MacroTools: MacroTools
 using ..TestRunner: TestRunnerTestSet, runtest, errors_and_fails
-using JSON3: JSON3
+using JSON: JSON
 
 include("testrunner-types.jl")
 
@@ -490,7 +490,7 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
             stats,
             logs,
             diagnostics)
-        JSON3.write(stdout, result)
+        JSON.json(stdout, result)
     end
 end
 
