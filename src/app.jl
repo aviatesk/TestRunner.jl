@@ -182,17 +182,12 @@ end
 
 function parse_pattern(pattern::String)
     # Line number pattern: L10 or L10:20
-    if startswith(pattern, "L")
-        line_spec = pattern[2:end]
-        if contains(line_spec, ":")
-            parts = split(line_spec, ":", limit=2)
-            start_line = tryparse(Int, parts[1])
-            end_line = tryparse(Int, parts[2])
-            if start_line === nothing || end_line === nothing
-                error_print("Invalid line range pattern:", pattern)
-                error_detail_print("Expected format: L<start>:<end> where start and end are integers")
-                return nothing
-            end
+    # Only treat as line pattern if it matches the exact format (L followed by digits, optionally with :digits)
+    line_pattern_match = match(r"^L(\d+)(?::(\d+))?$", pattern)
+    if line_pattern_match !== nothing
+        start_line = parse(Int, line_pattern_match.captures[1])
+        if line_pattern_match.captures[2] !== nothing
+            end_line = parse(Int, line_pattern_match.captures[2])
             if start_line > end_line
                 error_print("Invalid line range (start > end):", pattern)
                 error_detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")
@@ -200,12 +195,7 @@ function parse_pattern(pattern::String)
             end
             return start_line:end_line
         else
-            line_num = @something tryparse(Int, line_spec) begin
-                error_print("Invalid line number pattern:", pattern)
-                error_detail_print("Expected format: L<number> where number is an integer")
-                return nothing
-            end
-            return line_num
+            return start_line
         end
     # Expression pattern: :(expr)
     elseif startswith(pattern, ":")
