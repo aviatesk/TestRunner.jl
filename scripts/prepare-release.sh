@@ -109,7 +109,7 @@ echo "==> Step 6: Creating pull request"
 PR_BODY="Update vendored dependencies.
 
 ## Checklist
-- [ ] CI tests pass with vendored environment
+- [ ] \`release / Test with vendored environment\`
 
 ## Post-merge
 - The \`$BRANCH_NAME\` branch should be deleted after merging"
