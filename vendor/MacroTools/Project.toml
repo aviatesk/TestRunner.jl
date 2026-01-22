@@ -1,0 +1,13 @@
+name = "MacroTools"
+uuid = "90711cde-3a55-5bed-8c91-ff489981721a"
+version = "0.5.16"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+julia = "1.6"
+Test = "<0.0.1, 1"
+
+[targets]
+test = ["Test"]

@@ -1,0 +1,38 @@
+name = "JSON"
+uuid = "46009aa5-408a-5993-b482-0512622b8f27"
+version = "1.4.0"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+PrecompileTools = "34277385-dbfe-5e9c-a5da-1fda53d5b4c9"
+Parsers = "e996d0cc-5495-5f06-b9fe-87f07f942bbe"
+StructUtils = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+Unicode = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
+
+[extras]
+Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
+Tar = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
+
+[compat]
+Arrow = "2.8.0"
+julia = "1.9"
+PrecompileTools = "1"
+Parsers = "1, 2"
+StructUtils = "2.3"
+ArrowTypes = "2.2"
+
+[targets]
+test = ["Arrow", "Tar", "Test"]
+
+[sources.PrecompileTools]
+path = "../PrecompileTools"
+
+[sources.Parsers]
+path = "../Parsers"
+
+[sources.StructUtils]
+path = "../StructUtils"

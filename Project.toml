@@ -4,14 +4,31 @@ version = "0.1.0"
 authors = ["Shuhei Kadowaki <aviatesk@gmail.com>"]
 
 [deps]
-Compiler = "807dbc54-b67e-4c79-8afb-eafe4df6f2e1"
-JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-JuliaInterpreter = "aa1ae85d-cabe-5617-a682-6adf51b2e16a"
-JuliaSyntax = "70703baa-626e-46a2-a12c-08ffd08c73b4"
-LoweredCodeUtils = "6f1432cf-f94c-5a45-995e-cdbf5db27b0b"
-MacroTools = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
-PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
+CodeTracking = "84636303-58db-50e9-b60a-55781930faa2"
+Compiler = "24462c5c-eae5-5efa-8a3d-a35d8ccd96aa"
+JSON = "46009aa5-408a-5993-b482-0512622b8f27"
+JuliaInterpreter = "a82ab8a0-b04b-500c-ae1d-6b4e87c3563c"
+JuliaSyntax = "6213d419-e26c-57d9-96d0-6998e7acb287"
+LoweredCodeUtils = "93a4bf1e-9445-5238-95ce-690001486732"
+MacroTools = "90711cde-3a55-5bed-8c91-ff489981721a"
+Parsers = "e996d0cc-5495-5f06-b9fe-87f07f942bbe"
+PrecompileTools = "34277385-dbfe-5e9c-a5da-1fda53d5b4c9"
+Preferences = "a85d3927-2675-5020-995e-8e17f64c82bb"
+StructUtils = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+CodeTracking = {path = "vendor/CodeTracking"}
+Compiler = {path = "vendor/Compiler"}
+JSON = {path = "vendor/JSON"}
+JuliaInterpreter = {path = "vendor/JuliaInterpreter"}
+JuliaSyntax = {path = "vendor/JuliaSyntax"}
+LoweredCodeUtils = {path = "vendor/LoweredCodeUtils"}
+MacroTools = {path = "vendor/MacroTools"}
+Parsers = {path = "vendor/Parsers"}
+PrecompileTools = {path = "vendor/PrecompileTools"}
+Preferences = {path = "vendor/Preferences"}
+StructUtils = {path = "vendor/StructUtils"}
 
 [compat]
 Compiler = "0.1"

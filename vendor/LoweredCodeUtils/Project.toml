@@ -1,0 +1,33 @@
+name = "LoweredCodeUtils"
+uuid = "93a4bf1e-9445-5238-95ce-690001486732"
+version = "3.5.0"
+authors = ["Tim Holy <tim.holy@gmail.com>"]
+
+[deps]
+Compiler = "24462c5c-eae5-5efa-8a3d-a35d8ccd96aa"
+JuliaInterpreter = "a82ab8a0-b04b-500c-ae1d-6b4e87c3563c"
+CodeTracking = "84636303-58db-50e9-b60a-55781930faa2"
+
+[extras]
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
+
+[compat]
+Compiler = "0.1"
+julia = "1.10"
+JuliaInterpreter = "0.10"
+CodeTracking = "3"
+
+[targets]
+test = ["InteractiveUtils", "Parameters", "Pkg", "Test"]
+
+[sources.Compiler]
+path = "../Compiler"
+
+[sources.JuliaInterpreter]
+path = "../JuliaInterpreter"
+
+[sources.CodeTracking]
+path = "../CodeTracking"
