@@ -1,0 +1,22 @@
+name = "StructUtils"
+uuid = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
+version = "2.6.2"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+[extras]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
+
+[compat]
+julia = "1.9"
+Tables = "1"
+Measurements = "2"
+
+[targets]
+test = ["Dates", "Measurements", "Tables", "Test", "UUIDs"]
