@@ -89,7 +89,7 @@ julia --startup-file=no --project=. scripts/vendor-deps.jl --source-branch=maste
 # Step 5: Commit the final release
 echo "==> Step 5: Committing release"
 git add -A
-git commit -m "release: update vendored dependencies"
+git commit -m "release: update sources to reference vendor commit"
 
 if [[ "$LOCAL_MODE" == true ]]; then
     echo ""
