@@ -6,6 +6,8 @@ on:
       - master
       - release
   pull_request:
+    branches-ignore:
+      - release
 
 jobs:
   test:
