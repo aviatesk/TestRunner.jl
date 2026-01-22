@@ -23,39 +23,45 @@ dependencies are executed.
 
 ## Installation
 
+### As a CLI application (recommended)
+
+Install from the `release` branch, which has vendored dependencies to avoid
+conflicts with your project's packages:
+
 ```julia-repl
-pkg> add https://github.com/aviatesk/TestRunner.jl
+pkg> app add https://github.com/aviatesk/TestRunner.jl#release
 ```
 
-TestRunner can also be installed as a standalone Julia application:
+This installs the `testrunner` executable. Make sure `~/.julia/bin` is in your
+`PATH`. See <https://pkgdocs.julialang.org/dev/apps/> for details.
+
+### As a package
+
+For programmatic usage within Julia:
 
 ```julia-repl
-pkg> app add https://github.com/aviatesk/TestRunner.jl
+pkg> add https://github.com/aviatesk/TestRunner.jl#release
 ```
-
-This will install the `testrunner` executable.
-Note that you need to manually make `~/.julia/bin` available on the `PATH`
-environment for the executable to be accessible.
-See <https://pkgdocs.julialang.org/dev/apps/> for the details.
 
 ## Quick Start
+
+```bash
+$ testrunner demo.jl "basic tests"  # Run tests matching a specific testset name
+
+$ testrunner demo.jl "basic tests" "struct tests"  # Run multiple testsets
+
+$ testrunner demo.jl '(:(@test startswith(inner_func2(), "inner")))'  # Run standalone test case
+```
+
+Or equivalently via Julia REPL:
 ```julia-repl
 julia> using TestRunner
 
-julia> runtest("demo.jl", ["basic tests"]) # Run tests matching a specific testset name
+julia> runtest("demo.jl", ["basic tests"])
 
-julia> runtest("demo.jl", ["basic tests", "struct tests"]) # Run multiple testsets
+julia> runtest("demo.jl", ["basic tests", "struct tests"])
 
-julia> runtest("demo.jl", [:(@test startswith(inner_func2(), "inner"))]) # Run standalone test case
-```
-
-Or quivalently via the command line app:
-```bash
-$ testrunner demo.jl "basic tests"
-
-$ testrunner demo.jl "basic tests" "struct tests"
-
-$ testrunner demo.jl '(:(@test startswith(inner_func2(), "inner")))'
+julia> runtest("demo.jl", [:(@test startswith(inner_func2(), "inner"))])
 ```
 
 ## Programmatic Usage
@@ -612,3 +618,30 @@ TestRunner is built on top of:
 - [JuliaSyntax.jl](https://github.com/JuliaLang/JuliaSyntax.jl) for parsing
 - [MacroTools.jl](https://github.com/FluxML/MacroTools.jl) for pattern
   matching
+
+### Release Process
+
+TestRunner avoids dependency conflicts by rewriting the UUIDs of its
+dependencies and vendoring them. This allows the `testrunner` CLI to work
+reliably in any user environment.
+
+**Branch strategy:**
+- `master`: Development branch where regular development happens
+- `release`: Distribution branch for users with vendored dependencies
+
+**Updating the release:**
+```bash
+./scripts/prepare-release.sh
+```
+
+This script:
+1. Creates a `release-update` branch from `release` and merges `master`
+2. Vendors dependencies with rewritten UUIDs
+3. Creates a pull request to `release`
+
+After CI passes, merge the PR using "Create a merge commit".
+
+For local testing of vendored environment:
+```bash
+julia --startup-file=no --project=. scripts/vendor-deps.jl --source-branch=master --local
+```
