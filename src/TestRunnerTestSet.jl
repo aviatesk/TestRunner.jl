@@ -14,7 +14,7 @@ Base.show(io::IO, ws::WrappedString) = print(io, ws.value)
 
 function Test.record(trts::TestRunnerTestSet, @nospecialize res)
     global current_interpreter
-    interp = current_interpreter
+    interp = current_interpreter[]
     if res isa Test.Threw
         (; exception, #=backtrace,=# source) = res
         excs = copy(interp.current_exceptions)

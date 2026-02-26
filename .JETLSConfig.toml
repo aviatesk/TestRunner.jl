@@ -1,0 +1,6 @@
+# Suppress false positive from Test.@testset macro expansion
+[[diagnostic.patterns]]
+pattern = "no matching method found `copy!\\(::Random\\.TaskLocalRNG, ::Nothing\\)`"
+match_by = "message"
+match_type = "regex"
+severity = "off"

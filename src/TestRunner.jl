@@ -1,6 +1,6 @@
 module TestRunner
 
-export runtest, runtests, TestRunnerTestSet
+export TestRunnerTestSet, runtest, runtests
 
 using Core.IR
 using Compiler: Compiler as CC
@@ -31,7 +31,7 @@ function TRInterpreter(interp::TRInterpreter;
     return TRInterpreter(patterns, filter_lines, filename, context, current_exceptions)
 end
 
-global current_interpreter::TRInterpreter
+const current_interpreter = Ref{TRInterpreter}()
 
 const errors_and_fails = Dict{Union{Test.Error,Test.Fail},Vector{Any}}()
 
@@ -102,7 +102,8 @@ function runtest(filename::AbstractString, patterns;
         filter_lines = Dict{String,Set{Int}}(filepath => Set{Int}(filter_lines))
     end
     interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
-    global current_interpreter = interp
+    global current_interpreter
+    current_interpreter[] = interp
     empty!(errors_and_fails)
     _selective_run(interp)
 end
@@ -185,7 +186,8 @@ function runtests(entryfilename::AbstractString, patterns_for_files;
     end
     filepath = abspath(entryfilename)
     interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
-    global current_interpreter = interp
+    global current_interpreter
+    current_interpreter[] = interp
     empty!(errors_and_fails)
     _selective_run(interp)
 end
@@ -222,7 +224,9 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
             isbare = JS.has_flags(node, JS.BARE_MODULE_FLAG)
             newcontext = Core.eval(context, Expr(:module, !isbare, Expr(ModuleName), Expr(:block, lnn)))
             newinterp = TRInterpreter(interp; context=newcontext)
-            for newsn in JS.children(newsntop)
+            children = JS.children(newsntop)
+            children === nothing && continue
+            for newsn in children
                 _selective_run(newinterp, newsn)
             end
             continue
@@ -366,7 +370,7 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
     cl = LCU.CodeLinks(mod, src)
     edges = LCU.CodeEdges(src, cl)
 
-    for (idx, stmt) in enumerate(src.code)
+    for idx in 1:length(src.code)
         # If the line containing this statement is requested by pattern match,
         # this statement needs to be executed.
         lins = Base.IRShow.buildLineInfoNode(src.debuginfo, nothing, idx)
@@ -501,7 +505,7 @@ end
 # `JI.evaluate_call!(::JI.NonRecursiveInterpreter, ...)`
 # but includes a few important adjustments specific to TestRunner's virtual process:
 # - Special handling for `include` calls: recursively apply the virtual process to included files.
-function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, fargs::Vector{Any}, ::Bool)
+function JI.evaluate_call!(interp::TRInterpreter, ::JI.Frame, fargs::Vector{Any}, ::Bool)
     args = fargs
     f = popfirst!(fargs)
     args = fargs # now it's really args
@@ -528,7 +532,7 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
         end
     else
         @invokelatest include_func(args...) # make it throw throw
-        @assert false "unreachable"
+        throw(ErrorException("unreachable"))
     end
     if !isa(fname, String)
         @invokelatest include_func(args...) # make it throw throw
@@ -573,7 +577,7 @@ function scrub_exc_stack(excs::Vector{ExceptionFrame})
 end
 
 include("app.jl")
-using .TestRunnerApp: main, app_runner_module
+using .TestRunnerApp: app_runner_module, main
 
 include("precompile.jl")
 
