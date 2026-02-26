@@ -1,6 +1,6 @@
 module Precompile
 
-using ..TestRunner: TestRunner, runtest, main, app_runner_module
+using ..TestRunner: TestRunner, app_runner_module, main, runtest
 
 using PrecompileTools
 
