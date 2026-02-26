@@ -62,21 +62,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: julia-actions/setup-julia@v2
+      - uses: aviatesk/JETLS.jl/.github/actions/check@master # TODO Use @release
         with:
-          version: "1.12"
-          arch: x64
-      - uses: julia-actions/cache@v2
-      - name: Install jetls
-        run: |
-          julia --startup-file=no -e '
-            using Pkg
-            Pkg.Apps.add(; url="https://github.com/aviatesk/JETLS.jl",
-                           rev="release")
-          '
-          echo "$HOME/.julia/bin" >> "$GITHUB_PATH"
-      - name: Run jetls check
-        run: ./scripts/jetls-check.sh
+          files: src/TestRunner.jl
 
   test-vendored:
     name: Test with vendored environment
