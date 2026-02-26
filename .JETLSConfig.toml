@@ -2,5 +2,5 @@
 [[diagnostic.patterns]]
 pattern = "no matching method found `copy!\\(::Random\\.TaskLocalRNG, ::Nothing\\)`"
 match_by = "message"
-match_type = "regex"
+match_type = "literal"
 severity = "off"
