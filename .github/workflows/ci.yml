@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: aviatesk/JETLS.jl/.github/actions/check@master # TODO Use @release
+      - uses: aviatesk/JETLS.jl/.github/actions/check@release
         with:
           files: src/TestRunner.jl
 
