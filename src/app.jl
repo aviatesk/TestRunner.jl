@@ -71,7 +71,7 @@ function (@main)(args::Vector{String})
 
     patterns = String[]
     filename = filter_lines = project = nothing
-    verbose = json_output = false
+    verbose = json_output = read_stdin = false
 
     i = 1
     while i <= length(args)
@@ -100,6 +100,8 @@ function (@main)(args::Vector{String})
             verbose = true
         elseif arg == "--json"
             json_output = true
+        elseif arg == "--read-stdin"
+            read_stdin = true
         elseif startswith(arg, "-") && arg != "-"
             error_print("Unknown option:", arg)
             error_detail_print("Run with --help to see available options")
@@ -132,7 +134,7 @@ function (@main)(args::Vector{String})
     end
 
     # Run tests
-    return runtest_app(filename, parsed_patterns, filter_lines, verbose, project, json_output)
+    return runtest_app(filename, parsed_patterns, filter_lines, verbose, project, json_output, read_stdin)
 end
 
 function print_usage()
@@ -156,6 +158,9 @@ function print_usage()
       -f=1,5,10:20              Short form of --filter-lines
       --verbose, -v             Show verbose output
       --json                    Output results in JSON format
+      --read-stdin              Read source for <path> from stdin instead of disk
+                                (<path> is still used for `@__FILE__`, error
+                                messages, and resolving `include`d files)
       -h, --help                Show this help message
 
     Examples:
@@ -375,7 +380,8 @@ function extract_diagnostics_from_exception(ex::Test.TestSetException)
     return diagnostics
 end
 
-function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
+function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project,
+                          source::Union{Nothing,String}=nothing)
     # Set `LOAD_PATH` manually: app shim sets limits it by default
     if Base.should_use_main_entrypoint()
         empty!(LOAD_PATH)
@@ -437,13 +443,18 @@ function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines,
 
     topmodule = @something app_runner_module[] Main
     if isempty(patterns)
-        return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
+        if source === nothing
+            return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
+        else
+            return Test.@testset "$bname" verbose=verbose Base.include_string(topmodule, source, filename)
+        end
     else
-        return Test.@testset TestRunnerTestSet "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule)
+        return Test.@testset TestRunnerTestSet "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule, source)
     end
 end
 
-function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project)
+function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project,
+                      source::Union{Nothing,String}=nothing)
     # Redirect stdout to capture ALL output (including info_print, header_print, etc.)
     original_stdout = stdout
     (rd, wr) = redirect_stdout()
@@ -452,7 +463,7 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
     local diagnostics::Vector{TestRunnerDiagnostic} = TestRunnerDiagnostic[]
     start_time = time()
     try
-        result = runtest_internal(filename, patterns, filter_lines, verbose, project)
+        result = runtest_internal(filename, patterns, filter_lines, verbose, project, source)
         counts = Test.get_test_counts(result)
         n_passed = counts.passes + counts.cumulative_passes
         n_failed = counts.fails + counts.cumulative_fails
@@ -483,15 +494,16 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
     end
 end
 
-function runtest_app(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project, json_output::Bool)
-    if !isfile(filename)
+function runtest_app(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project, json_output::Bool, read_stdin::Bool=false)
+    source = read_stdin ? read(stdin, String) : nothing
+    if source === nothing && !isfile(filename)
         error_print("File not found:", filename)
         return 1
     end
     if json_output
-        return runtest_json(filename, patterns, filter_lines, verbose, project)
+        return runtest_json(filename, patterns, filter_lines, verbose, project, source)
     else
-        runtest_internal(filename, patterns, filter_lines, verbose, project)
+        runtest_internal(filename, patterns, filter_lines, verbose, project, source)
         return 0
     end
 end
