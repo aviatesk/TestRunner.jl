@@ -29,9 +29,11 @@ sizeguess(::Null) = 4
 sizeguess(::Omit) = 0
 sizeguess(_) = 512
 
+const StringLike = Union{Enum, AbstractChar, VersionNumber, Cstring, Cwstring, UUID, Dates.TimeType, Type, Logging.LogLevel}
+
 StructUtils.lower(::JSONStyle, ::Missing) = nothing
 StructUtils.lower(::JSONStyle, x::Symbol) = String(x)
-StructUtils.lower(::JSONStyle, x::Union{Enum, AbstractChar, VersionNumber, Cstring, Cwstring, UUID, Dates.TimeType, Type, Logging.LogLevel}) = string(x)
+StructUtils.lower(::JSONStyle, x::StringLike) = string(x)
 StructUtils.lower(::JSONStyle, x::Regex) = x.pattern
 StructUtils.lower(::JSONStyle, x::AbstractArray{<:Any,0}) = x[1]
 StructUtils.lower(::JSONStyle, x::AbstractArray{<:Any, N}) where {N} = (view(x, ntuple(_ -> :, N - 1)..., j) for j in axes(x, N))
@@ -250,9 +252,8 @@ end
 
 StructUtils.lowerkey(::JSONStyle, s::AbstractString) = s
 StructUtils.lowerkey(::JSONStyle, sym::Symbol) = String(sym)
-StructUtils.lowerkey(::JSONStyle, n::Union{Integer, Union{Float16, Float32, Float64}}) = string(n)
+StructUtils.lowerkey(::JSONStyle, s::Union{StringLike, Real}) = string(s)
 StructUtils.lowerkey(::JSONStyle, x) = throw(ArgumentError("No key representation for $(typeof(x)). Define StructUtils.lowerkey(::JSON.JSONStyle, ::$(typeof(x)))"))
-
 """
     JSON.json(x) -> String
     JSON.json(io, x)
@@ -282,7 +283,7 @@ All methods accept the following keyword arguments:
   If `false`, throw an error if `Inf`, `-Inf`, or `NaN` is encountered.
 
 - `jsonlines::Bool=false`: If `true`, input must be array-like and the output will be written in the JSON Lines format,
-  where each element of the array is written on a separate line (i.e. separated by a single newline character `\n`).
+  where each element of the array is written on a separate line (i.e. separated by a single newline character '\`\\n\`').
   If `false`, the output will be written in the standard JSON format.
 
 - `pretty::Union{Integer,Bool}=false`: Controls pretty printing of the JSON output.
@@ -290,6 +291,11 @@ All methods accept the following keyword arguments:
   If an integer, it will be used as the number of spaces of indentation.
   If `false` or `0`, the output will be compact.
   Note: Pretty printing is not supported when `jsonlines=true`.
+
+- `sort_keys::Union{Bool, Nothing}=nothing`: Controls whether dictionary keys are sorted before writing.
+  If `true`, keys for all `AbstractDict` objects are sorted by their lowered string representation.
+  If `false`, dictionary iteration order is preserved. If `nothing`, plain `Dict` keys are sorted
+  by default while other dictionary-like containers preserve their iteration order.
 
 - `inline_limit::Int=0`: For arrays shorter than this limit, pretty printing will be disabled (indentation set to 0).
 
@@ -434,6 +440,7 @@ function json end
     inline_limit::Int = 0
     float_style::Symbol = :shortest # :shortest, :fixed, :exp
     float_precision::Int = 1
+    sort_keys::Union{Bool, Nothing} = nothing
     bufsize::Int = 2^22 # 4MB default buffer size for IO flushing
     style::S = JSONWriteStyle()
 end
@@ -545,6 +552,8 @@ end
 
 checkkey(s) = s isa AbstractString || throw(ArgumentError("Value returned from `StructUtils.lowerkey` must be a string: $(typeof(s))"))
 
+_sort_keys_by_default(x) = x isa Dict
+
 function (f::WriteClosure{JS, arraylike, T, I})(key, val) where {JS, arraylike, T, I}
     track_ref = ismutabletype(typeof(val))
     is_circ_ref = track_ref && any(x -> x === val, f.ancestor_stack)
@@ -589,7 +598,7 @@ function (f::WriteClosure{JS, arraylike, T, I})(key, val) where {JS, arraylike, 
         track_ref && push!(f.ancestor_stack, val)
         # if jsonlines, we need to recursively set to false
         if f.opts.jsonlines
-            opts = WriteOptions(; omit_null=f.opts.omit_null, omit_empty=f.opts.omit_empty, allownan=f.opts.allownan, jsonlines=false, pretty=f.opts.pretty, ninf=f.opts.ninf, inf=f.opts.inf, nan=f.opts.nan, inline_limit=f.opts.inline_limit, float_style=f.opts.float_style, float_precision=f.opts.float_precision)
+            opts = WriteOptions(; omit_null=f.opts.omit_null, omit_empty=f.opts.omit_empty, allownan=f.opts.allownan, jsonlines=false, pretty=f.opts.pretty, ninf=f.opts.ninf, inf=f.opts.inf, nan=f.opts.nan, inline_limit=f.opts.inline_limit, float_style=f.opts.float_style, float_precision=f.opts.float_precision, sort_keys=f.opts.sort_keys)
         else
             opts = f.opts
         end
@@ -668,7 +677,15 @@ function json!(buf, pos, x, opts::WriteOptions, ancestor_stack::Union{Nothing, V
         wroteanyref = Ref(false)
         GC.@preserve ref wroteanyref begin
             c = WriteClosure{typeof(opts), al, typeof(x), typeof(io)}(buf, Base.unsafe_convert(Ptr{Int}, ref), Base.unsafe_convert(Ptr{Bool}, wroteanyref), local_ind, depth + 1, opts, ancestor_stack, io, bufsize)
-            StructUtils.applyeach(opts.style, c, x)
+            _sort_keys = opts.sort_keys === true || (opts.sort_keys === nothing && !al && _sort_keys_by_default(x))
+            if _sort_keys && !al && x isa AbstractDict
+                sorted_keys = sort!(collect(keys(x)), by=k -> StructUtils.lowerkey(opts.style, k))
+                for k in sorted_keys
+                    c(StructUtils.lowerkey(opts.style, k), StructUtils.lower(opts.style, x[k]))
+                end
+            else
+                StructUtils.applyeach(opts.style, c, x)
+            end
             # get updated pos
             pos = unsafe_load(c.pos)
             wroteany = unsafe_load(c.wroteany)

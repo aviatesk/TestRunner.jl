@@ -1,6 +1,14 @@
 using Test, Dates, UUIDs, StructUtils
 
 struct TestStyle <: StructUtils.StructStyle end
+struct StrictUnknownFieldStyle <: StructUtils.StructStyle end
+struct UnknownFieldTestError <: Exception
+    target::Any
+    key::Any
+end
+
+StructUtils.unknownfield(::StrictUnknownFieldStyle, ::Type{T}, key, value) where {T} =
+    throw(UnknownFieldTestError(T, key))
 
 include(joinpath(dirname(pathof(StructUtils)), "../test/macros.jl"))
 include(joinpath(dirname(pathof(StructUtils)), "../test/struct.jl"))
@@ -22,6 +30,7 @@ t = (1, 2, 3, 4)
 
 println("Dict{Symbol, Int}")
 @test StructUtils.make(Dict{Symbol, Int}, d) == d
+@test StructUtils.make(Dict{Symbol, Int}, d) !== d
 @test StructUtils.make(Dict{Symbol, Int}, ds) == d
 @test StructUtils.make(Dict{Symbol, Int}, nt) == d
 @test StructUtils.make(Dict{Symbol, Int}, a) == d
@@ -107,8 +116,27 @@ println("Vector")
 @test StructUtils.make(typeof(v), a) == v
 @test StructUtils.make(typeof(v), vp) == v
 @test StructUtils.make(typeof(v), v) == v
+@test StructUtils.make(typeof(v), v) !== v
 @test StructUtils.make(typeof(v), t) == v
 # @test StructUtils.make(typeof(v), aa) == v # fails because of extra field
+
+println("Abstract collections")
+ad = Dict("a" => 1)
+av = [1, 2, 3]
+
+@test StructUtils.make(AbstractDict, ad) === ad
+@test StructUtils.make(AbstractArray, av) === av
+@test StructUtils.make(AbstractVector, av) === av
+@test StructUtils.make!(AbstractDict, ad) === ad
+@test StructUtils.make!(AbstractArray, av) === av
+@test StructUtils.make!(AbstractVector, av) === av
+
+x = StructUtils.make(AbstractDictHolder, Dict("d" => ad))
+@test x.d === ad
+x = StructUtils.make(AbstractArrayHolder, Dict("a" => av))
+@test x.a === av
+x = StructUtils.make(AbstractVectorHolder, Dict("v" => av))
+@test x.v === av
 
 println("Tuple")
 # @test StructUtils.make(typeof(t), d) == t # relies on order of Dict elements
@@ -119,6 +147,18 @@ println("Tuple")
 @test StructUtils.make(typeof(t), v) == t
 @test StructUtils.make(typeof(t), t) == t
 @test StructUtils.make(typeof(t), aa) == t
+
+@testset "unknownfield hook" begin
+    @test StructUtils.make(A, nt, StrictUnknownFieldStyle()) == a
+    @test_throws UnknownFieldTestError StructUtils.make(A, (a=1, b=2, c=3, d=4, e=5), StrictUnknownFieldStyle())
+    @test_throws UnknownFieldTestError StructUtils.make(typeof(nt), aa, StrictUnknownFieldStyle())
+    @test_throws UnknownFieldTestError StructUtils.make(typeof(t), [1, 2, 3, 4, 5], StrictUnknownFieldStyle())
+
+    pmut2 = P()
+    StructUtils.make!(pmut2, (id=0, name="Jane"); style=StrictUnknownFieldStyle())
+    @test pmut2.id == 0 && pmut2.name == "Jane"
+    @test_throws UnknownFieldTestError StructUtils.make!(pmut2, (id=0, name="Joan", rate=3.14); style=StrictUnknownFieldStyle())
+end
 
 println("C")
 @test StructUtils.make(C, ()) == C()
@@ -206,6 +246,13 @@ StructUtils.reset!(p)
 println("Q")
 @test StructUtils.make(Q, (id=0, value="application/json")) == Q(0, MIME("application/json"))
 
+@testset "arraylike public API" begin
+    @test StructUtils.arraylike([1]) == true
+    @test StructUtils.arraylike((1, 2)) == true
+    @test StructUtils.arraylike(Set([1])) == true
+    @test StructUtils.arraylike(1) == false
+end
+
 @testset "applyeach with Pair" begin
     # Basic functionality - collect key-value pairs
     collected = []
@@ -288,6 +335,22 @@ end
     # fill slice [:, :, 2] from second slab [[3,4]]
     exp3[:, :, 2] = reshape([3,4], 2, 1)
     @test x3 == exp3
+
+    # Jagged nested vectors (Vector of Vectors)
+    jagged = [[1, 2], [3, 4, 5], [6]]
+    result = StructUtils.make(Vector{Vector{Int}}, jagged)
+    @test result == jagged
+
+    # Multi-dimensional case with jagged inner vectors
+    vv_jagged = [[[1, 2], [3]], [[4, 5, 6], [7, 8]]]
+    result_md = StructUtils.make(Array{Vector{Int}, 2}, vv_jagged)
+
+    md_jagged = Array{Vector{Int}}(undef, 2, 2)
+    md_jagged[1, 1] = [1, 2]
+    md_jagged[2, 1] = [3]
+    md_jagged[1, 2] = [4, 5, 6]
+    md_jagged[2, 2] = [7, 8]
+    @test result_md == md_jagged
 end
 
 @testset "@nonstruct macro" begin
@@ -324,6 +387,80 @@ end
     @test StructUtils.make(typeof(empty_nt), (;)) == (;)
     @test StructUtils.make(NamedTuple{(), Tuple{}}, Dict()) == (;)
     @test StructUtils.make(Dict{Symbol, Int}, (;)) == Dict{Symbol, Int}()
+end
+
+@testset "Union{scalar, array} disambiguation" begin
+    # basic: scalar source → scalar type, array source → array type
+    @test StructUtils.make(ScalarOrVec, (val=3.14,)).val === 3.14
+    @test StructUtils.make(ScalarOrVec, (val=[1.0, 2.0],)).val == [1.0, 2.0]
+    @test StructUtils.make(ScalarOrVec, (val=[1.0, 2.0],)).val isa Vector{Float64}
+
+    # Any-typed sources (the case that actually fails without disambiguation)
+    @test StructUtils.make(ScalarOrVec, Dict{String,Any}("val" => 3.14)).val === 3.14
+    x = StructUtils.make(ScalarOrVec, Dict{String,Any}("val" => Any[1.0, 2.0]))
+    @test x.val isa Vector{Float64}
+    @test x.val == [1.0, 2.0]
+
+    # String variant
+    @test StructUtils.make(ScalarOrVecStr, (val="hello",)).val == "hello"
+    x = StructUtils.make(ScalarOrVecStr, Dict{String,Any}("val" => Any["a", "b"]))
+    @test x.val isa Vector{String}
+    @test x.val == ["a", "b"]
+
+    # Int variant
+    @test StructUtils.make(ScalarOrVecInt, (val=42,)).val === 42
+    x = StructUtils.make(ScalarOrVecInt, Dict{String,Any}("val" => Any[1, 2, 3]))
+    @test x.val isa Vector{Int}
+    @test x.val == [1, 2, 3]
+
+    # with Nothing — Nothing is peeled first, then array/scalar split
+    @test StructUtils.make(ScalarOrVecNothing, (val=nothing,)).val === nothing
+    @test StructUtils.make(ScalarOrVecNothing, (val=5,)).val === 5
+    x = StructUtils.make(ScalarOrVecNothing, Dict{String,Any}("val" => Any[1, 2]))
+    @test x.val isa Vector{Int}
+    @test x.val == [1, 2]
+
+    # with Missing — Missing is peeled first, then array/scalar split
+    @test StructUtils.make(ScalarOrVecMissing, (val=missing,)) == ScalarOrVecMissing(missing)
+    @test StructUtils.make(ScalarOrVecMissing, (val=1.5,)).val === 1.5
+    x = StructUtils.make(ScalarOrVecMissing, Dict{String,Any}("val" => Any[1.0, 2.0]))
+    @test x.val isa Vector{Float64}
+    @test x.val == [1.0, 2.0]
+
+    # empty array → array type
+    x = StructUtils.make(ScalarOrVec, (val=Float64[],))
+    @test x.val isa Vector{Float64}
+    @test isempty(x.val)
+
+    # nested struct with Union field
+    x = StructUtils.make(ScalarOrVecNested, Dict{String,Any}("id" => 1, "data" => Any[1.0, 2.0, 3.0]))
+    @test x.id == 1
+    @test x.data isa Vector{Float64}
+    @test x.data == [1.0, 2.0, 3.0]
+    x = StructUtils.make(ScalarOrVecNested, (id=1, data=3.14))
+    @test x.id == 1
+    @test x.data === 3.14
+
+    # the original issue: Tuple with complex nested Union types
+    x = StructUtils.make(FrankenTuple, (params=(nothing, [1.0, 2.0, 3.0], nothing),))
+    @test x.params[1] === nothing
+    @test x.params[2] isa Vector{Float64}
+    @test x.params[2] == [1.0, 2.0, 3.0]
+    @test x.params[3] === nothing
+    # same tuple, all scalars
+    x = StructUtils.make(FrankenTuple, (params=(1.0, 2.0, 3.0),))
+    @test x.params[1] === 1.0
+    @test x.params[2] === 2.0
+    @test x.params[3] === 3.0
+
+    # ambiguous: two arraylike types → should NOT be handled, falls through
+    @test_throws Exception StructUtils.make(@NamedTuple{val::Union{Vector{Int}, Set{Int}}}, Dict{String,Any}("val" => Any[1, 2]))
+
+    # Vector of structs with Union fields
+    x = StructUtils.make(Vector{ScalarOrVec}, [(val=1.0,), (val=[2.0, 3.0],)])
+    @test x[1].val === 1.0
+    @test x[2].val isa Vector{Float64}
+    @test x[2].val == [2.0, 3.0]
 end
 
 @testset "BigInt/BigFloat structlike" begin
@@ -379,4 +516,24 @@ end
     @test StructUtils.make(SomeStruct, Dict(:my_field => 45)).my_field == 45
 end
 
+using StaticArrays
+
+@testset "fixedsizearray trait" begin
+    @test StructUtils.fixedsizearray(Matrix{Int}) == true
+    @test StructUtils.fixedsizearray(Array{Float64, 3}) == true
+    @test StructUtils.fixedsizearray(Vector{Int}) == false
+    @test StructUtils.fixedsizearray(Set{Int}) == false
+    @test StructUtils.fixedsizearray(SVector{3, Int}) == true
 end
+
+@testset "StaticArrays" begin
+    @test StructUtils.make(SVector{3,Int}, [1, 2, 3]) == SVector{3,Int}((1, 2, 3))
+    @test StructUtils.make(SVector{2,Float64}, [1, 2]) == SVector{2,Float64}((1.0, 2.0))
+    @test StructUtils.make(SMatrix{2,2,Int}, [[1, 3], [2, 4]]) == SMatrix{2,2,Int}((1, 3, 2, 4))
+    @test StructUtils.make(MVector{3,Int}, [1, 2, 3]) == MVector{3,Int}((1, 2, 3))
+    @test StructUtils.make(Vector{SVector{2,Int}}, [[1, 2], [3, 4]]) == [SVector{2,Int}((1, 2)), SVector{2,Int}((3, 4))]
+end
+
+end
+
+include("trim_compile_tests.jl")

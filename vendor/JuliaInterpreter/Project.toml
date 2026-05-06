@@ -1,6 +1,6 @@
 name = "JuliaInterpreter"
 uuid = "a82ab8a0-b04b-500c-ae1d-6b4e87c3563c"
-version = "0.10.9"
+version = "0.10.12"
 authors = ["Tim Holy <tim.holy@gmail.com>, Kristoffer Carlsson <kcarlsson89@gmail.com>, Shuhei Kadowaki <aviatesk@gmail.com> and contributors"]
 
 [deps]
@@ -35,5 +35,5 @@ test = ["CassetteOverlay", "DataFrames", "Dates", "DeepDiffs", "Distributed", "F
 
 [sources.CodeTracking]
 subdir = "vendor/CodeTracking"
-rev = "5d4cca227a0c250bc079d8f37c85532f26b90d2e"
+rev = "96b6a073f4d978da806287235b6b351f3f92bf7f"
 url = "https://github.com/aviatesk/TestRunner.jl"

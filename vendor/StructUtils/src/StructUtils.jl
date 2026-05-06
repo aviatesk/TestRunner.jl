@@ -116,6 +116,22 @@ returns `nothing`.
 defaultstate(::StructStyle) = nothing
 
 """
+    StructUtils.unknownfield(::StructStyle, ::Type{T}, key, value)
+
+Called from [`StructUtils.make`](@ref) and [`StructUtils.make!`](@ref) when a
+source key or index does not match any field or positional slot in the target
+type `T`.
+
+The default implementation ignores the extra input by returning
+[`StructUtils.defaultstate`](@ref). Custom struct styles can overload this to
+throw, return [`StructUtils.EarlyReturn`](@ref), or otherwise customize the
+behavior for unknown fields.
+"""
+function unknownfield end
+
+unknownfield(st::StructStyle, ::Type{T}, key, value) where {T} = defaultstate(st)
+
+"""
     StructUtils.fieldtags(::StructStyle, ::Type{T}) -> NamedTuple
     StructUtils.fieldtags(::StructStyle, ::Type{T}, fieldname) -> NamedTuple
 
@@ -147,6 +163,7 @@ using the StructUtils.jl macros: `@tags`, `@noarg`, `@defaults`, or `@kwarg`.
 function fielddefaults end
 
 fielddefaults(::StructStyle, T::Type)::NamedTuple{(),Tuple{}} = (;)
+fielddefaults(st::StructStyle, T::Type, vals) = fielddefaults(st, T)
 fielddefault(st::StructStyle, T::Type, key) = get(fielddefaults(st, T), key, nothing)
 
 "See [`fielddefaults`](@ref)."
@@ -168,7 +185,7 @@ initialize(st::StructStyle, T::Type, @nospecialize(source)) =
 
 function initialize(st::StructStyle, ::Type{A}, source) where {A<:AbstractArray}
     if ndims(A) > 1
-        dims = discover_dims(st, source)
+        dims = discover_dims(st, source, ndims(A))
         return A(undef, dims)
     else
         return A(undef, 0)
@@ -217,7 +234,27 @@ arraylike(::Type{<:AbstractSet}) = true
 arraylike(::Type{<:Tuple}) = true
 arraylike(::Type{<:Base.Generator}) = true
 arraylike(::Type{<:Core.SimpleVector}) = true
-arraylike(@nospecialize(T)) = false
+arraylike(@nospecialize(::Type)) = false
+arraylike(@nospecialize(x)) = arraylike(typeof(x))
+
+"""
+    StructUtils.fixedsizearray(::Type{T}) -> Bool
+    StructUtils.fixedsizearray(::StructStyle, ::Type{T}) -> Bool
+
+Returns `true` if `T` is a fixed-size array type that should be pre-allocated
+and filled via `setindex!` rather than grown via `push!`. The default
+implementation returns `true` for multidimensional `<:AbstractArray` types
+(ndims > 1) and `false` for everything else.
+
+Override this for custom array types that have a fixed, known size but
+are not growable (e.g. `StaticArrays.StaticArray`).
+"""
+function fixedsizearray end
+
+fixedsizearray(::Type) = false
+fixedsizearray(::Type{<:AbstractArray{T,N}}) where {T,N} = N > 1
+fixedsizearray(::Type{<:AbstractSet}) = false
+fixedsizearray(st::StructStyle, ::Type{T}) where {T} = fixedsizearray(T)
 
 """
     StructUtils.structlike(x) -> Bool
@@ -483,6 +520,10 @@ struct EarlyReturn{T}
     value::T
 end
 
+struct _MatchedState{T}
+    value::T
+end
+
 applyeach(f, x) = applyeach(DefaultStyle(), f, x)
 applyeach(f, st::StructStyle, x) = applyeach(st, f, x)
 
@@ -660,15 +701,45 @@ end # VERSION < v"1.10"
 # "[[[1.0],[2.0]]]" => (1, 2, 1)
 # "[[[1.0,2.0]]]" => (2, 1, 1)
 # length of innermost array is 1st dim
-function discover_dims(style, x)
+function discover_dims(style, x, ndims::Int)
     @assert arraylike(style, x)
     len = applylength(x)
+    if ndims == 1
+        return (len,)
+    end
+
     ret = (
         applyeach(x) do _, v
-            return arraylike(style, v) ? EarlyReturn(discover_dims(style, v)) : EarlyReturn(())
+            return arraylike(style, v) ? EarlyReturn(discover_dims(style, v, ndims - 1)) : EarlyReturn(())
         end
     )::EarlyReturn
     return (ret.value..., len)
+end
+
+"""
+    StructUtils.discover_dims(style, ::Type{T}, source) -> Tuple
+
+Discover the dimensions for a fixed-size array type `T`. By default,
+delegates to `discover_dims(style, source, ndims(T))` to scan the source object.
+Override for types where dimensions are encoded in the type itself
+(e.g. `StaticArrays.StaticArray`), avoiding the need to scan the source.
+"""
+discover_dims(style, ::Type{T}, source) where {T} = discover_dims(style, source, ndims(T))
+
+"""
+    StructUtils.arrayfromdata(::Type{T}, mem, dims::Tuple) -> T
+
+Convert a filled data buffer `mem` with shape `dims` into the target array
+type `T`. Called at the end of `makearray` for `fixedsizearray` types.
+"""
+function arrayfromdata end
+
+arrayfromdata(::Type{T}, buf::Vector, dims::Tuple) where {T<:AbstractArray} =
+    reshape(buf, dims)
+
+if VERSION >= v"1.11"
+    arrayfromdata(::Type{T}, mem::Memory, dims::Tuple) where {T<:AbstractArray} =
+        Base.wrap(Array, Base.memoryref(mem), dims)
 end
 
 struct MultiDimClosure{S,A}
@@ -680,7 +751,7 @@ end
 
 function (f::MultiDimClosure{S,A})(i::Int, val) where {S,A}
     f.dims[f.cur_dim[]] = i
-    if arraylike(f.style, val)
+    if arraylike(f.style, val) && f.cur_dim[] > 1
         f.cur_dim[] -= 1
         st = applyeach(f, f.style, val)
         f.cur_dim[] += 1
@@ -744,6 +815,11 @@ else
     const _delete = delete
 end
 
+# Abstract collection targets are not constructible, so when the incoming value
+# already satisfies the abstract type we must preserve it instead of rebuilding.
+@inline abstractcollectionpassthrough(style::StructStyle, ::Type{T}, source) where {T} =
+    isabstracttype(T) && source isa T && (dictlike(style, T) || arraylike(style, T))
+
 function make(style::StructStyle, T::Type, source, tags)
     if haskey(tags, :choosetype)
         return make(style, tags.choosetype(source), source, _delete(tags, :choosetype))
@@ -762,6 +838,38 @@ function make(style::StructStyle, T::Type, source, tags)
                 return make(style, Base.nonnothingtype(T), source, tags)
             end
         end
+        # for Union types like Union{T, Vector{T}} (after Nothing/Missing have been peeled),
+        # we can disambiguate by checking if source is arraylike;
+        # only applies when there's exactly one arraylike and one non-arraylike member
+        if T isa Union
+            types = Base.uniontypes(T)
+            arr_type = nothing
+            scalar_type = nothing
+            ambiguous = false
+            for t in types
+                if arraylike(style, t)
+                    # more than one arraylike type means we can't disambiguate
+                    if arr_type !== nothing
+                        ambiguous = true
+                        break
+                    end
+                    arr_type = t
+                else
+                    if scalar_type !== nothing
+                        ambiguous = true
+                        break
+                    end
+                    scalar_type = t
+                end
+            end
+            if !ambiguous && arr_type !== nothing && scalar_type !== nothing
+                if arraylike(style, source)
+                    return make(style, arr_type, source, tags)
+                else
+                    return make(style, scalar_type, source, tags)
+                end
+            end
+        end
     end
     if T <: Tuple || dictlike(style, T) || arraylike(style, T) || noarg(style, T) || structlike(style, T)
         return make(style, T, source)
@@ -771,6 +879,9 @@ function make(style::StructStyle, T::Type, source, tags)
 end
 
 function make(style::StructStyle, T::Type, source)
+    if abstractcollectionpassthrough(style, T, source)
+        return source, defaultstate(style)
+    end
     # start with some hard-coded Union cases
     if T !== Any
         if T >: Missing && T !== Missing
@@ -784,6 +895,38 @@ function make(style::StructStyle, T::Type, source)
                 return make(style, Nothing, source)
             else
                 return make(style, Base.nonnothingtype(T), source)
+            end
+        end
+        # for Union types like Union{T, Vector{T}} (after Nothing/Missing have been peeled),
+        # we can disambiguate by checking if source is arraylike;
+        # only applies when there's exactly one arraylike and one non-arraylike member
+        if T isa Union
+            types = Base.uniontypes(T)
+            arr_type = nothing
+            scalar_type = nothing
+            ambiguous = false
+            for t in types
+                if arraylike(style, t)
+                    # more than one arraylike type means we can't disambiguate
+                    if arr_type !== nothing
+                        ambiguous = true
+                        break
+                    end
+                    arr_type = t
+                else
+                    if scalar_type !== nothing
+                        ambiguous = true
+                        break
+                    end
+                    scalar_type = t
+                end
+            end
+            if !ambiguous && arr_type !== nothing && scalar_type !== nothing
+                if arraylike(style, source)
+                    return make(style, arr_type, source)
+                else
+                    return make(style, scalar_type, source)
+                end
             end
         end
     end
@@ -832,7 +975,7 @@ function (f::TupleClosure{T,A,S})(k, v) where {T,A,S}
             if k == i
                 intval, intst = make(f.style, fieldtype(T, i), v)
                 @inbounds f.vals[i] = intval
-                return EarlyReturn(intst)
+                return EarlyReturn(_MatchedState(intst))
             end
         else
             j = unsafe_load(f.i)
@@ -840,11 +983,11 @@ function (f::TupleClosure{T,A,S})(k, v) where {T,A,S}
                 unsafe_store!(f.i, i + 1)
                 elseval, elsest = make(f.style, fieldtype(T, i), v)
                 @inbounds f.vals[i] = elseval
-                return EarlyReturn(elsest)
+                return EarlyReturn(_MatchedState(elsest))
             end
         end
     end
-    return st === nothing ? defaultstate(f.style) : st
+    return st isa _MatchedState ? st.value : unknownfield(f.style, T, k, v)
 end
 
 function maketuple(style, ::Type{T}, source) where {T}
@@ -886,7 +1029,42 @@ function (f::ArrayClosure{T,S})(_, v) where {T,S}
     return st
 end
 
-makearray(style, ::Type{T}, source) where {T} = @inline makearray(style, initialize(style, T, source), source)
+struct FixedArrayClosure{A,S}
+    arr::A
+    style::S
+    idx::Base.RefValue{Int}
+end
+
+function (f::FixedArrayClosure{A,S})(_, v) where {A,S}
+    val, st = make(f.style, eltype(f.arr), v)
+    i = f.idx[]
+    @inbounds f.arr[i] = val
+    f.idx[] = i + 1
+    return st
+end
+
+function makearray(style, ::Type{T}, source) where {T}
+    if fixedsizearray(style, T)
+        ET = eltype(T)
+        dims = discover_dims(style, T, source)
+        L = prod(dims)
+        if VERSION >= v"1.11"
+            data = Memory{ET}(undef, L)
+        else
+            data = Vector{ET}(undef, L)
+        end
+        N = length(dims)
+        if N > 1
+            buf = reshape(data, dims)
+            st = applyeach(style, MultiDimClosure(style, buf, ones(Int, N), Ref(N)), source)
+        else
+            st = applyeach(style, FixedArrayClosure(data, style, Ref(1)), source)
+        end
+        return arrayfromdata(T, data, dims), st
+    else
+        return @inline makearray(style, initialize(style, T, source), source)
+    end
+end
 
 function makearray(style, x::T, source) where {T}
     if !(T <: AbstractSet) && ndims(T) > 1
@@ -934,14 +1112,14 @@ function findfield(::Type{T}, k, v, f) where {T}
             if keyeq(k, field) || keyeq(k, fn)
                 symval, symst = make(f.style, fieldtype(T, i), v, ftags)
                 setval!(f.vals, symval, i)
-                return EarlyReturn(symst)
+                return EarlyReturn(_MatchedState(symst))
             end
         elseif typeof(k) == Int
             if k == i
                 ftags = fieldtags(f.style, T, f.fsyms[i])
                 intval, intst = make(f.style, fieldtype(T, i), v, ftags)
                 setval!(f.vals, intval, i)
-                return EarlyReturn(intst)
+                return EarlyReturn(_MatchedState(intst))
             end
         else
             fn = f.fsyms[i]
@@ -951,11 +1129,11 @@ function findfield(::Type{T}, k, v, f) where {T}
             if keyeq(k, field)
                 strval, strst = make(f.style, fieldtype(T, i), v, ftags)
                 setval!(f.vals, strval, i)
-                return EarlyReturn(strst)
+                return EarlyReturn(_MatchedState(strst))
             end
         end
     end
-    return st === nothing ? defaultstate(f.style) : st
+    return st isa _MatchedState ? st.value : unknownfield(f.style, T, k, v)
 end
 
 (f::StructClosure{T,A,S,FS,FSS})(k, v) where {T,A,S,FS,FSS} = findfield(T, k, v, f)
@@ -970,14 +1148,20 @@ function makenoarg(style, y::T, source) where {T}
 end
 
 macro _v(i)
-    esc(:(isassigned(vals, $i) ? @inbounds(vals[$i])::fieldtype(T, $i) : fielddefault(style, T, @inbounds(fsyms[$i]))::fieldtype(T, $i)))
+    esc(:(isassigned(vals, $i) ? @inbounds(vals[$i])::fieldtype(T, $i) : get(defs, @inbounds(fsyms[$i]), nothing)::fieldtype(T, $i)))
 end
 
 @generated function _construct(::Type{T}, vals, style, fsyms) where {T}
     n = fieldcount(T)
     ex = Expr(:block)
     push!(ex.args, :(Base.@_inline_meta))
-    push!(ex.args, Expr(:call, Any[:T, [:(@_v($i)) for i = 1:n]...]...))
+    # fast path: all fields assigned, skip fielddefaults entirely
+    all_assigned = Expr(:&&, [:(isassigned(vals, $i)) for i = 1:n]...)
+    fast = Expr(:call, Any[:T, [:(@inbounds(vals[$i])::fieldtype(T, $i)) for i = 1:n]...]...)
+    slow = Expr(:block,
+        :(defs = fielddefaults(style, T, vals)),
+        Expr(:call, Any[:T, [:(@_v($i)) for i = 1:n]...]...))
+    push!(ex.args, Expr(:if, all_assigned, fast, slow))
     return ex
 end
 
@@ -1010,12 +1194,16 @@ function make!(style::StructStyle, x::T, source) where {T}
 end
 
 function make!(style::StructStyle, ::Type{T}, source) where {T}
+    if abstractcollectionpassthrough(style, T, source)
+        return source
+    end
     x = initialize(style, T, source)
     make!(style, x, source)
     return x
 end
 
-@doc (@doc make) make!
+"See [`make`](@ref)."
+make!
 
 """
     StructUtils.reset!(x::T)
