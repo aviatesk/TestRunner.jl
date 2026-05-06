@@ -2,8 +2,7 @@ module TestRunnerApp
 
 # Import necessary modules
 using Test: Test
-using MacroTools: MacroTools
-using ..TestRunner: TestRunnerTestSet, runtest, errors_and_fails
+using ..TestRunner: TestRunnerTestSet, errors_and_fails, runtest
 using JSON: JSON
 
 include("testrunner-types.jl")
@@ -185,9 +184,9 @@ function parse_pattern(pattern::String)
     # Only treat as line pattern if it matches the exact format (L followed by digits, optionally with :digits)
     line_pattern_match = match(r"^L(\d+)(?::(\d+))?$", pattern)
     if line_pattern_match !== nothing
-        start_line = parse(Int, line_pattern_match.captures[1])
+        start_line = parse(Int, line_pattern_match.captures[1]::AbstractString)
         if line_pattern_match.captures[2] !== nothing
-            end_line = parse(Int, line_pattern_match.captures[2])
+            end_line = parse(Int, line_pattern_match.captures[2]::AbstractString)
             if start_line > end_line
                 error_print("Invalid line range (start > end):", pattern)
                 error_detail_print("Start line ($start_line) must be less than or equal to end line ($end_line)")

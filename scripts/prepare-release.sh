@@ -80,6 +80,22 @@ if [[ "$LOCAL_MODE" == false ]]; then
     git push -u origin "$BRANCH_NAME"
 fi
 
+if [[ "$LOCAL_MODE" == true ]]; then
+    echo ""
+    echo "==> Local mode: stopping after vendor commit"
+    echo ""
+    echo "Branch $BRANCH_NAME has the vendor commit, but [sources] still"
+    echo "references local paths instead of git revisions, so it is not"
+    echo "suitable for a real release."
+    echo ""
+    echo "Clean up:"
+    echo "  git checkout release && git branch -D $BRANCH_NAME"
+    echo ""
+    echo "To run a real release, drop the local branch and re-run without"
+    echo "--local."
+    exit 0
+fi
+
 # Step 4: Get the commit SHA and update [sources] to reference it
 echo "==> Step 4: Updating [sources] to reference commit SHA"
 VENDOR_COMMIT=$(git rev-parse HEAD)
@@ -90,17 +106,6 @@ julia --startup-file=no --project=. scripts/vendor-deps.jl --source-branch=maste
 echo "==> Step 5: Committing release"
 git add -A
 git commit -m "release: update sources to reference vendor commit"
-
-if [[ "$LOCAL_MODE" == true ]]; then
-    echo ""
-    echo "==> Local mode: skipping push and PR creation"
-    echo ""
-    echo "Release branch prepared locally: $BRANCH_NAME"
-    echo "To complete the release manually:"
-    echo "  1. git push -u origin $BRANCH_NAME"
-    echo "  2. Create a PR from $BRANCH_NAME to release"
-    exit 0
-fi
 
 git push origin "$BRANCH_NAME"
 
