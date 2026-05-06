@@ -524,7 +524,6 @@ end
 # but includes a few important adjustments specific to TestRunner's virtual process:
 # - Special handling for `include` calls: recursively apply the virtual process to included files.
 function JI.evaluate_call!(interp::TRInterpreter, ::JI.Frame, fargs::Vector{Any}, ::Bool)
-    args = fargs
     f = popfirst!(fargs)
     args = fargs # now it's really args
     isinclude(f) && return handle_include(interp, f, args)
