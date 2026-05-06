@@ -86,6 +86,18 @@ struct Wrapper
     x::NamedTuple{(:a, :b), Tuple{Int, String}}
 end
 
+struct AbstractDictHolder
+    d::AbstractDict
+end
+
+struct AbstractArrayHolder
+    a::AbstractArray
+end
+
+struct AbstractVectorHolder
+    v::AbstractVector
+end
+
 mutable struct UndefGuy
     id::Int
     name::String
@@ -222,4 +234,35 @@ end
 struct Q
     id::Int
     value::MIME
+end
+
+# Union{scalar, array} disambiguation test types
+struct ScalarOrVec
+    val::Union{Float64, Vector{Float64}}
+end
+
+struct ScalarOrVecStr
+    val::Union{String, Vector{String}}
+end
+
+struct ScalarOrVecInt
+    val::Union{Int, Vector{Int}}
+end
+
+struct ScalarOrVecNothing
+    val::Union{Int, Vector{Int}, Nothing}
+end
+
+struct ScalarOrVecMissing
+    val::Union{Float64, Vector{Float64}, Missing}
+end
+Base.:(==)(a::ScalarOrVecMissing, b::ScalarOrVecMissing) = isequal(a.val, b.val)
+
+struct ScalarOrVecNested
+    id::Int
+    data::Union{Float64, Vector{Float64}}
+end
+
+struct FrankenTuple
+    params::Tuple{Union{Float64, Nothing}, Union{Vector{Float64}, Float64}, Union{Vector{Float64}, Float64, Nothing}}
 end

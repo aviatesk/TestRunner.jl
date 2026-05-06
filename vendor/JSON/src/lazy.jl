@@ -59,6 +59,7 @@ Currently supported keyword arguments include:
   - `inf::String = "Infinity"`: the string that will be used to parse `Inf` if `allownan=true`
   - `nan::String = "NaN"`: the string that will be sued to parse `NaN` if `allownan=true`
   - `jsonlines::Bool = false`: whether the JSON input should be treated as an implicit array, with newlines separating individual JSON elements with no leading `'['` or trailing `']'` characters. Common in logging or streaming workflows. Defaults to `true` when used with `JSON.parsefile` and the filename extension is `.jsonl` or `ndjson`. Note this ensures that parsing will _always_ return an array at the root-level.
+  - `isroot::Bool = true`: whether this is the root LazyValue encompassing the entire json buffer. If `false` parses only the first JSON value and ignores trailing characters.
 
 Note that validation is only fully done on `null`, `true`, and `false`,
 while other values are only lazily inferred from the first non-whitespace character:
@@ -86,9 +87,10 @@ lazy(io::Union{IO, Base.AbstractCmd}; kw...) = lazy(Base.read(io); kw...)
 
 lazyfile(file; jsonlines::Union{Bool, Nothing}=nothing, kw...) = open(io -> lazy(io; jsonlines=(jsonlines === nothing ? isjsonl(file) : jsonlines), kw...), file)
 
-@doc (@doc lazy) lazyfile
+"See [`lazy`](@ref)."
+lazyfile
 
-function lazy(buf::Union{AbstractVector{UInt8}, AbstractString}; kw...)
+function lazy(buf::Union{AbstractVector{UInt8}, AbstractString}; isroot::Bool=true, kw...)
     if !applicable(pointer, buf, 1) || (buf isa AbstractVector{UInt8} && !isone(only(strides(buf))))
         if buf isa AbstractString
             buf = String(buf)
@@ -116,7 +118,7 @@ function lazy(buf::Union{AbstractVector{UInt8}, AbstractString}; kw...)
     # detect and ignore UTF-8 BOM
     pos = (len >= 3 && getbyte(buf, pos) == 0xef && getbyte(buf, pos + 1) == 0xbb && getbyte(buf, pos + 2) == 0xbf) ? pos + 3 : pos
     @nextbyte
-    return _lazy(buf, pos, len, b, LazyOptions(; kw...), true)
+    return _lazy(buf, pos, len, b, LazyOptions(; kw...), isroot)
 
 @label invalid
     invalid(error, buf, pos, Any)

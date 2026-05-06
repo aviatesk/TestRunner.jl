@@ -1,6 +1,6 @@
 name = "JSON"
 uuid = "46009aa5-408a-5993-b482-0512622b8f27"
-version = "1.4.0"
+version = "1.5.2"
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -22,23 +22,17 @@ Arrow = "2.8.0"
 julia = "1.9"
 PrecompileTools = "1"
 Parsers = "1, 2"
-StructUtils = "2.3"
+StructUtils = "2.8"
 ArrowTypes = "2.2"
 
 [targets]
 test = ["Arrow", "Tar", "Test"]
 
 [sources.PrecompileTools]
-subdir = "vendor/PrecompileTools"
-rev = "5d4cca227a0c250bc079d8f37c85532f26b90d2e"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../PrecompileTools"
 
 [sources.Parsers]
-subdir = "vendor/Parsers"
-rev = "5d4cca227a0c250bc079d8f37c85532f26b90d2e"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../Parsers"
 
 [sources.StructUtils]
-subdir = "vendor/StructUtils"
-rev = "5d4cca227a0c250bc079d8f37c85532f26b90d2e"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../StructUtils"
