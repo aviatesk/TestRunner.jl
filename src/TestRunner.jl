@@ -38,7 +38,7 @@ const errors_and_fails = Dict{Union{Test.Error,Test.Fail},Vector{Any}}()
 include("TestRunnerTestSet.jl")
 
 """
-    runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
+    runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main, source=nothing)
 
 Run tests from a file that match the given patterns and/or are on the specified lines.
 
@@ -57,6 +57,10 @@ function definitions, imports, and struct definitions.
 - `filter_lines=nothing`: Optional collection of line numbers to filter pattern matches.
   When provided, only pattern matches that overlap with these lines will be executed
 - `topmodule::Module=Main`: Module context for execution (default: `Main`)
+- `source::Union{Nothing,AbstractString}=nothing`: When provided, use this source text for
+  the entry file instead of reading it from disk. `filename` is still used for
+  `@__FILE__`, error messages, and resolving paths of `include`d files (which are
+  read from disk as usual)
 
 # Returns
 Test results from the selectively executed tests, compatible with Julia's Test.jl framework.
@@ -93,7 +97,8 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 """
 function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
-                 topmodule::Module=Main)
+                 topmodule::Module=Main,
+                 source::Union{Nothing,AbstractString}=nothing)
     filepath = abspath(filename)
     patterns = Dict{String,Vector{Any}}(filepath => Any[pat for pat in patterns])
     if isnothing(filter_lines)
@@ -105,7 +110,7 @@ function runtest(filename::AbstractString, patterns;
     global current_interpreter
     current_interpreter[] = interp
     empty!(errors_and_fails)
-    _selective_run(interp)
+    _selective_run(interp; source)
 end
 
 """
@@ -173,7 +178,8 @@ runtests("test/runtests.jl",
 """
 function runtests(entryfilename::AbstractString, patterns_for_files;
                   filter_lines_for_files=nothing,
-                  topmodule::Module=Main)
+                  topmodule::Module=Main,
+                  source::Union{Nothing,AbstractString}=nothing)
     patterns = Dict{String,Vector{Any}}()
     for (filepath, pats) in patterns_for_files
         patterns[abspath(filepath)] = Any[pat for pat in pats]
@@ -189,13 +195,18 @@ function runtests(entryfilename::AbstractString, patterns_for_files;
     global current_interpreter
     current_interpreter[] = interp
     empty!(errors_and_fails)
-    _selective_run(interp)
+    _selective_run(interp; source)
 end
 
-function _selective_run(interp::TRInterpreter)
+function _selective_run(interp::TRInterpreter;
+                        source::Union{Nothing,AbstractString}=nothing)
     filename = interp.filename
-    isfile(filename) || throw(SystemError(lazy"opening file \"$filename\"", 2, nothing))
-    toptext = read(filename, String)
+    if source === nothing
+        isfile(filename) || throw(SystemError(lazy"opening file \"$filename\"", 2, nothing))
+        toptext = read(filename, String)
+    else
+        toptext = source
+    end
     stream = JS.ParseStream(toptext)
     JS.parse!(stream; rule=:all)
     isempty(stream.diagnostics) || throw(JS.ParseError(stream))

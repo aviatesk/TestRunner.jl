@@ -76,10 +76,6 @@ julia --startup-file=no --project=. scripts/vendor-deps.jl --source-branch=maste
 echo "==> Step 3: Committing vendor/ directory"
 git add -A
 git commit -m "vendor: update vendored dependencies"
-if [[ "$LOCAL_MODE" == false ]]; then
-    git push -u origin "$BRANCH_NAME"
-fi
-
 if [[ "$LOCAL_MODE" == true ]]; then
     echo ""
     echo "==> Local mode: stopping after vendor commit"
@@ -94,6 +90,8 @@ if [[ "$LOCAL_MODE" == true ]]; then
     echo "To run a real release, drop the local branch and re-run without"
     echo "--local."
     exit 0
+else
+    git push -u origin "$BRANCH_NAME"
 fi
 
 # Step 4: Get the commit SHA and update [sources] to reference it
