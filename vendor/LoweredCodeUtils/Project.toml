@@ -24,16 +24,10 @@ CodeTracking = "3"
 test = ["InteractiveUtils", "Parameters", "Pkg", "Test"]
 
 [sources.Compiler]
-subdir = "vendor/Compiler"
-rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../Compiler"
 
 [sources.JuliaInterpreter]
-subdir = "vendor/JuliaInterpreter"
-rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../JuliaInterpreter"
 
 [sources.CodeTracking]
-subdir = "vendor/CodeTracking"
-rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../CodeTracking"
