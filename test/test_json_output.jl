@@ -190,6 +190,27 @@ end
         json_result = JSON.parse(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1
     end
+
+    # When source comes from stdin, the file path is treated as a virtual
+    # identifier and not `abspath`'d, so editor integrations can pass an
+    # untitled-buffer name and have it round-trip through diagnostics
+    # unchanged.
+    let source = """
+        using Test
+        @testset "virtual" begin
+            @test 1 == 2
+        end
+        """
+        virtual_name = "Untitled-1"
+        result = run_testrunner_process(
+            ["--json", "--read-stdin", virtual_name];
+            stdin_input=source)
+        @test result.exitcode == 1
+        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        @test json_result.filename == virtual_name
+        @test !isempty(json_result.diagnostics)
+        @test all(diag -> diag.filename == virtual_name, json_result.diagnostics)
+    end
 end
 
 end # module test_json_output

@@ -99,7 +99,11 @@ function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
                  topmodule::Module=Main,
                  source::Union{Nothing,AbstractString}=nothing)
-    filepath = abspath(filename)
+    # When the caller supplies `source`, treat `filename` as a virtual identifier
+    # and avoid `abspath` so callers like editor integrations can pass a
+    # synthetic name (e.g. an untitled buffer name) and have it round-trip
+    # through diagnostics unchanged.
+    filepath = source === nothing ? abspath(filename) : String(filename)
     patterns = Dict{String,Vector{Any}}(filepath => Any[pat for pat in patterns])
     if isnothing(filter_lines)
         filter_lines = Dict{String,Set{Int}}()
@@ -190,7 +194,8 @@ function runtests(entryfilename::AbstractString, patterns_for_files;
             filter_lines[abspath(filepath)] = Set{Int}(lines)
         end
     end
-    filepath = abspath(entryfilename)
+    # See `runtest` — keep `entryfilename` verbatim when `source` is supplied.
+    filepath = source === nothing ? abspath(entryfilename) : String(entryfilename)
     interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
     global current_interpreter
     current_interpreter[] = interp
