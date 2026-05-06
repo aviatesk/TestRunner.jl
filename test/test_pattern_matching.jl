@@ -56,6 +56,29 @@ using JuliaSyntax: JuliaSyntax as JS
         end
     end
 
+    # `@testset CustomTestSet "name" body` is supported by `Test.@testset` for
+    # using a custom `AbstractTestSet` type; it should match by name just like
+    # the vanilla form.
+    @testset "Custom test set type" begin
+        let expr = :(@testset MyTestSet "foo" begin end)
+            @test TestRunner.matches_pattern(expr, Any["foo"])
+            @test !TestRunner.matches_pattern(expr, Any["bar"])
+            @test TestRunner.matches_pattern(expr, Any[r"^fo"])
+        end
+
+        let expr = :(@testset MyTestSet "verbose case" verbose=true begin end)
+            @test TestRunner.matches_pattern(expr, Any["verbose case"])
+        end
+
+        # Loop form (`@testset Type for ... end`) has no string description and
+        # shouldn't match name patterns.
+        let expr = :(@testset MyTestSet for i = 1:3
+                @test i > 0
+            end)
+            @test !TestRunner.matches_pattern(expr, Any["foo"])
+        end
+    end
+
     @testset "Mixed pattern types" begin
         let patterns = Any["arithmetic", r"arith", :(@test add(a_, b_) == c_)]
             @test TestRunner.matches_pattern(:(@testset "arithmetic" begin end), patterns)

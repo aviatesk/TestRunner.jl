@@ -349,8 +349,15 @@ function matches_pattern(@nospecialize(expr), patterns::Vector{Any})
 end
 
 function matches_named_testset_call(pat::Union{AbstractString,Regex}, @nospecialize ex)
-    MacroTools.@capture(ex, @testset String_ xs__) || return false
-    return pat isa Regex ? occursin(pat, String) : pat == String
+    name = nothing
+    if MacroTools.@capture(ex, @testset name_String xs__)
+        # vanilla form: `@testset "name" body`
+    elseif MacroTools.@capture(ex, @testset Type_Symbol name_String xs__)
+        # custom test set type: `@testset Type "name" body`
+    else
+        return false
+    end
+    return pat isa Regex ? occursin(pat, name) : pat == name
 end
 
 function is_testset_or_test(@nospecialize expr)
