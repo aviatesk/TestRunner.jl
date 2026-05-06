@@ -69,7 +69,8 @@ julia> runtest("demo.jl", [:(@test startswith(inner_func2(), "inner"))])
 ### `runtest`
 
 ```julia
-runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main)
+runtest(filename::AbstractString, patterns;
+        filter_lines=nothing, topmodule::Module=Main, source=nothing)
 ```
 
 Run tests from a file that match the given patterns and/or are on the
@@ -84,6 +85,10 @@ specified lines.
   IDE integration where clicking on a specific test should run only that test, even when multiple
   tests may match the same pattern
 - `topmodule::Module=Main`: Module context for execution (default: `Main`)
+- `source::Union{Nothing,AbstractString}=nothing`: When provided, use this source text for the
+  entry file instead of reading it from disk. `filename` is still used for `@__FILE__`, error
+  messages, and resolving paths of `include`d files. Useful for editor integrations that want
+  to run tests against an unsaved buffer
 
 **Returns:**
 - Test results from the selectively executed tests
@@ -91,7 +96,8 @@ specified lines.
 ### `runtests`
 
 ```julia
-runtests(entryfilename::AbstractString, patterns; filter_lines=nothing, topmodule::Module=Main)
+runtests(entryfilename::AbstractString, patterns;
+         filter_lines=nothing, topmodule::Module=Main, source=nothing)
 ```
 
 The package also provides a `runtests` function for advanced use cases like
@@ -191,6 +197,10 @@ testrunner --help
 
 # Output results in JSON format
 testrunner --json mypkg/runtests.jl "my tests"
+
+# Read source from stdin (e.g. an unsaved editor buffer); the file path is
+# still needed for `@__FILE__` and to resolve any `include`d files
+cat my-edits.jl | testrunner --read-stdin --json mypkg/runtests.jl "my tests"
 ```
 
 Pattern formats:
@@ -205,6 +215,8 @@ Options:
 - `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
 - `--verbose` or `-v` - Show verbose output
 - `--json` - Output results in JSON format for machine-readable test results
+- `--read-stdin` - Read source for the given file path from stdin instead of disk.
+  The path is still used for `@__FILE__`, error messages, and resolving `include`d files
 
 ## Examples
 
