@@ -27,5 +27,5 @@ test = ["Aqua", "Serialization", "Test"]
 
 [sources.PrecompileTools]
 subdir = "vendor/PrecompileTools"
-rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d"
+rev = "d79c4a521efef5e8572419dce184a4b74931397c"
 url = "https://github.com/aviatesk/TestRunner.jl"

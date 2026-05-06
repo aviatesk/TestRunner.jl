@@ -3,7 +3,7 @@ module test_json_output
 using Test
 using JSON: JSON
 using TestRunner
-using TestRunner.TestRunnerApp: TestRunnerResult, TestRunnerStats
+using TestRunner.TestRunnerApp: TestRunnerResult
 
 function with_simple_passing_test_file(tester)
     content = """
@@ -186,6 +186,99 @@ end
         result = run_testrunner_process(
             ["--json", "--read-stdin", testfile, "second", "--filter-lines=5"];
             stdin_input=source)
+        @test result.exitcode == 0
+        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        @test json_result.stats.n_passed == 1
+    end
+
+    # When source comes from stdin, the file path is treated as a virtual
+    # identifier and not `abspath`'d, so editor integrations can pass an
+    # untitled-buffer name and have it round-trip through diagnostics
+    # unchanged.
+    let source = """
+        using Test
+        @testset "virtual" begin
+            @test 1 == 2
+        end
+        """
+        virtual_name = "Untitled-1"
+        result = run_testrunner_process(
+            ["--json", "--read-stdin", virtual_name];
+            stdin_input=source)
+        @test result.exitcode == 1
+        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        @test json_result.filename == virtual_name
+        @test !isempty(json_result.diagnostics)
+        @test all(diag -> diag.filename == virtual_name, json_result.diagnostics)
+    end
+end
+
+@testset "--root-path" begin
+    # `--root-path` lets a virtual stdin filename resolve relative `include`
+    # calls from a real workspace directory, both for the selective-execution
+    # path (with patterns, via `runtest`) and the plain include path (no
+    # patterns, via `Base.include_string`).
+    mktempdir() do dir
+        helper_path = joinpath(dir, "helpers.jl")
+        write(helper_path, "helper_value() = 42\n")
+        source = """
+        using Test
+        include("helpers.jl")
+        @testset "rooted" begin
+            @test helper_value() == 42
+        end
+        """
+        for extra_args in (String[], ["rooted"])
+            result = run_testrunner_process(
+                ["--json", "--read-stdin", "--root-path=$dir", "Untitled-1", extra_args...];
+                stdin_input=source)
+            @test result.exitcode == 0
+            @test isempty(result.stderr)
+            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            @test json_result.stats.n_passed == 1
+            @test isempty(json_result.diagnostics)
+        end
+    end
+
+    # Without `--root-path`, the same virtual filename can't find the helper
+    # because `dirname("Untitled-1")` is empty and resolution falls back to
+    # cwd, which is unlikely to contain the helper.
+    mktempdir() do dir
+        helper_path = joinpath(dir, "helpers.jl")
+        write(helper_path, "helper_value() = 42\n")
+        source = """
+        using Test
+        include("helpers.jl")
+        @testset "rooted" begin
+            @test helper_value() == 42
+        end
+        """
+        result = run_testrunner_process(
+            ["--json", "--read-stdin", "Untitled-1", "rooted"];
+            stdin_input=source)
+        @test result.exitcode != 0
+    end
+
+    # When `filename` carries its own directory, `--root-path` is ignored —
+    # nested includes resolve via that file's `dirname` as usual.
+    mktempdir() do dir
+        helper_path = joinpath(dir, "helpers.jl")
+        write(helper_path, "helper_value() = 42\n")
+        # An unrelated decoy in `--root-path` would mask the real helper if
+        # `--root-path` were preferred over `dirname`.
+        decoy_dir = mktempdir()
+        decoy_helper = joinpath(decoy_dir, "helpers.jl")
+        write(decoy_helper, "helper_value() = 0\n")
+        entry_path = joinpath(dir, "entry.jl")
+        write(entry_path, """
+        using Test
+        include("helpers.jl")
+        @testset "real dir" begin
+            @test helper_value() == 42
+        end
+        """)
+        result = run_testrunner_process(
+            ["--json", "--root-path=$decoy_dir", entry_path, "real dir"])
         @test result.exitcode == 0
         json_result = JSON.parse(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1

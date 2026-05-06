@@ -18,17 +18,17 @@ StructUtils = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
-CodeTracking = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/CodeTracking", url = "https://github.com/aviatesk/TestRunner.jl"}
-Compiler = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/Compiler", url = "https://github.com/aviatesk/TestRunner.jl"}
-JSON = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/JSON", url = "https://github.com/aviatesk/TestRunner.jl"}
-JuliaInterpreter = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/JuliaInterpreter", url = "https://github.com/aviatesk/TestRunner.jl"}
-JuliaSyntax = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/JuliaSyntax", url = "https://github.com/aviatesk/TestRunner.jl"}
-LoweredCodeUtils = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/LoweredCodeUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
-MacroTools = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/MacroTools", url = "https://github.com/aviatesk/TestRunner.jl"}
-Parsers = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/Parsers", url = "https://github.com/aviatesk/TestRunner.jl"}
-PrecompileTools = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/PrecompileTools", url = "https://github.com/aviatesk/TestRunner.jl"}
-Preferences = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/Preferences", url = "https://github.com/aviatesk/TestRunner.jl"}
-StructUtils = {rev = "24a26cb6ea05b70856687d2316cdc3c835e86c5d", subdir = "vendor/StructUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
+CodeTracking = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/CodeTracking", url = "https://github.com/aviatesk/TestRunner.jl"}
+Compiler = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/Compiler", url = "https://github.com/aviatesk/TestRunner.jl"}
+JSON = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/JSON", url = "https://github.com/aviatesk/TestRunner.jl"}
+JuliaInterpreter = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/JuliaInterpreter", url = "https://github.com/aviatesk/TestRunner.jl"}
+JuliaSyntax = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/JuliaSyntax", url = "https://github.com/aviatesk/TestRunner.jl"}
+LoweredCodeUtils = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/LoweredCodeUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
+MacroTools = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/MacroTools", url = "https://github.com/aviatesk/TestRunner.jl"}
+Parsers = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/Parsers", url = "https://github.com/aviatesk/TestRunner.jl"}
+PrecompileTools = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/PrecompileTools", url = "https://github.com/aviatesk/TestRunner.jl"}
+Preferences = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/Preferences", url = "https://github.com/aviatesk/TestRunner.jl"}
+StructUtils = {rev = "d79c4a521efef5e8572419dce184a4b74931397c", subdir = "vendor/StructUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
 
 [compat]
 Compiler = "0.1"
