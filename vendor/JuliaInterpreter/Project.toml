@@ -34,6 +34,4 @@ CodeTracking = "2, 3"
 test = ["CassetteOverlay", "DataFrames", "Dates", "DeepDiffs", "Distributed", "FunctionWrappers", "HTTP", "LinearAlgebra", "Logging", "LoopVectorization", "Mmap", "PyCall", "SHA", "SparseArrays", "Test"]
 
 [sources.CodeTracking]
-subdir = "vendor/CodeTracking"
-rev = "96b6a073f4d978da806287235b6b351f3f92bf7f"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../CodeTracking"

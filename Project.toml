@@ -18,17 +18,17 @@ StructUtils = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
-CodeTracking = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/CodeTracking", url = "https://github.com/aviatesk/TestRunner.jl"}
-Compiler = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/Compiler", url = "https://github.com/aviatesk/TestRunner.jl"}
-JSON = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/JSON", url = "https://github.com/aviatesk/TestRunner.jl"}
-JuliaInterpreter = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/JuliaInterpreter", url = "https://github.com/aviatesk/TestRunner.jl"}
-JuliaSyntax = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/JuliaSyntax", url = "https://github.com/aviatesk/TestRunner.jl"}
-LoweredCodeUtils = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/LoweredCodeUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
-MacroTools = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/MacroTools", url = "https://github.com/aviatesk/TestRunner.jl"}
-Parsers = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/Parsers", url = "https://github.com/aviatesk/TestRunner.jl"}
-PrecompileTools = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/PrecompileTools", url = "https://github.com/aviatesk/TestRunner.jl"}
-Preferences = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/Preferences", url = "https://github.com/aviatesk/TestRunner.jl"}
-StructUtils = {rev = "96b6a073f4d978da806287235b6b351f3f92bf7f", subdir = "vendor/StructUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
+CodeTracking = {path = "vendor/CodeTracking"}
+Compiler = {path = "vendor/Compiler"}
+JSON = {path = "vendor/JSON"}
+JuliaInterpreter = {path = "vendor/JuliaInterpreter"}
+JuliaSyntax = {path = "vendor/JuliaSyntax"}
+LoweredCodeUtils = {path = "vendor/LoweredCodeUtils"}
+MacroTools = {path = "vendor/MacroTools"}
+Parsers = {path = "vendor/Parsers"}
+PrecompileTools = {path = "vendor/PrecompileTools"}
+Preferences = {path = "vendor/Preferences"}
+StructUtils = {path = "vendor/StructUtils"}
 
 [compat]
 Compiler = "0.1"
