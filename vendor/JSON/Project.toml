@@ -29,10 +29,16 @@ ArrowTypes = "2.2"
 test = ["Arrow", "Tar", "Test"]
 
 [sources.PrecompileTools]
-path = "../PrecompileTools"
+subdir = "vendor/PrecompileTools"
+rev = "d79c4a521efef5e8572419dce184a4b74931397c"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.Parsers]
-path = "../Parsers"
+subdir = "vendor/Parsers"
+rev = "d79c4a521efef5e8572419dce184a4b74931397c"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.StructUtils]
-path = "../StructUtils"
+subdir = "vendor/StructUtils"
+rev = "d79c4a521efef5e8572419dce184a4b74931397c"
+url = "https://github.com/aviatesk/TestRunner.jl"

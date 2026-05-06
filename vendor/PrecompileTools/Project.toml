@@ -21,4 +21,6 @@ Preferences = "1"
 test = ["InteractiveUtils", "Pkg", "Test", "UUIDs"]
 
 [sources.Preferences]
-path = "../Preferences"
+subdir = "vendor/Preferences"
+rev = "d79c4a521efef5e8572419dce184a4b74931397c"
+url = "https://github.com/aviatesk/TestRunner.jl"
