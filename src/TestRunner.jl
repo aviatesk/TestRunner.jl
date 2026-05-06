@@ -17,6 +17,11 @@ struct TRInterpreter <: JI.Interpreter
     # constant across execution
     patterns::Dict{String,Vector{Any}}   # absolute path => patterns
     filter_lines::Dict{String,Set{Int}}  # absolute path => filter lines
+    # Fallback base directory for resolving relative `include` paths when the
+    # current file's `dirname` is empty (e.g. when `runtest` was given a
+    # virtual `filename` like an unsaved buffer name). `nothing` keeps the
+    # default behavior (resolution relative to cwd).
+    root_path::Union{Nothing,String}
     # constant across per-file execution
     filename::String # absolute path
     context::Module
@@ -25,10 +30,11 @@ end
 function TRInterpreter(interp::TRInterpreter;
                        patterns::Dict{String,Vector{Any}} = interp.patterns,
                        filter_lines::Dict{String,Set{Int}} = interp.filter_lines,
+                       root_path::Union{Nothing,String} = interp.root_path,
                        filename::String = interp.filename,
                        context::Module = interp.context,
                        current_exceptions::Vector{ExceptionFrame} = interp.current_exceptions)
-    return TRInterpreter(patterns, filter_lines, filename, context, current_exceptions)
+    return TRInterpreter(patterns, filter_lines, root_path, filename, context, current_exceptions)
 end
 
 const current_interpreter = Ref{TRInterpreter}()
@@ -38,7 +44,8 @@ const errors_and_fails = Dict{Union{Test.Error,Test.Fail},Vector{Any}}()
 include("TestRunnerTestSet.jl")
 
 """
-    runtest(filename::AbstractString, patterns, lines=(); topmodule::Module=Main, source=nothing)
+    runtest(filename::AbstractString, patterns, lines=();
+            topmodule::Module=Main, source=nothing, root_path=nothing)
 
 Run tests from a file that match the given patterns and/or are on the specified lines.
 
@@ -61,6 +68,12 @@ function definitions, imports, and struct definitions.
   the entry file instead of reading it from disk. `filename` is still used for
   `@__FILE__`, error messages, and resolving paths of `include`d files (which are
   read from disk as usual)
+- `root_path::Union{Nothing,AbstractString}=nothing`: Fallback base directory used when
+  resolving relative `include` paths from `filename` whose `dirname` is empty (typical
+  when `filename` is a virtual identifier such as an unsaved buffer name). Once an
+  include is resolved into a real path, nested includes resolve relative to that file
+  as usual. Defaults to `nothing`, in which case relative includes resolve against the
+  current working directory
 
 # Returns
 Test results from the selectively executed tests, compatible with Julia's Test.jl framework.
@@ -98,7 +111,8 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
                  topmodule::Module=Main,
-                 source::Union{Nothing,AbstractString}=nothing)
+                 source::Union{Nothing,AbstractString}=nothing,
+                 root_path::Union{Nothing,AbstractString}=nothing)
     # When the caller supplies `source`, treat `filename` as a virtual identifier
     # and avoid `abspath` so callers like editor integrations can pass a
     # synthetic name (e.g. an untitled buffer name) and have it round-trip
@@ -110,7 +124,8 @@ function runtest(filename::AbstractString, patterns;
     else
         filter_lines = Dict{String,Set{Int}}(filepath => Set{Int}(filter_lines))
     end
-    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
+    rp = root_path === nothing ? nothing : String(root_path)
+    interp = TRInterpreter(patterns, filter_lines, rp, filepath, topmodule, ExceptionFrame[])
     global current_interpreter
     current_interpreter[] = interp
     empty!(errors_and_fails)
@@ -183,7 +198,8 @@ runtests("test/runtests.jl",
 function runtests(entryfilename::AbstractString, patterns_for_files;
                   filter_lines_for_files=nothing,
                   topmodule::Module=Main,
-                  source::Union{Nothing,AbstractString}=nothing)
+                  source::Union{Nothing,AbstractString}=nothing,
+                  root_path::Union{Nothing,AbstractString}=nothing)
     patterns = Dict{String,Vector{Any}}()
     for (filepath, pats) in patterns_for_files
         patterns[abspath(filepath)] = Any[pat for pat in pats]
@@ -196,7 +212,8 @@ function runtests(entryfilename::AbstractString, patterns_for_files;
     end
     # See `runtest` — keep `entryfilename` verbatim when `source` is supplied.
     filepath = source === nothing ? abspath(entryfilename) : String(entryfilename)
-    interp = TRInterpreter(patterns, filter_lines, filepath, topmodule, ExceptionFrame[])
+    rp = root_path === nothing ? nothing : String(root_path)
+    interp = TRInterpreter(patterns, filter_lines, rp, filepath, topmodule, ExceptionFrame[])
     global current_interpreter
     current_interpreter[] = interp
     empty!(errors_and_fails)
@@ -560,7 +577,13 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
         @invokelatest include_func(args...) # make it throw throw
         @assert false "unreachable"
     end
-    included_file = normpath(dirname(interp.filename), fname)
+    # Use `interp.root_path` only as a fallback when the current file has no
+    # meaningful directory (i.e. a virtual top-level filename). Once an
+    # include resolves into a real path, nested includes use that file's
+    # `dirname` as usual.
+    filedir = dirname(interp.filename)
+    base = isempty(filedir) ? something(interp.root_path, "") : filedir
+    included_file = normpath(base, fname)
     newinterp = TRInterpreter(interp; filename=included_file, context=include_context)
     _selective_run(newinterp)
 end
