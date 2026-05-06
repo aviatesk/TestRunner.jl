@@ -70,7 +70,7 @@ function (@main)(args::Vector{String})
     end
 
     patterns = String[]
-    filename = filter_lines = project = nothing
+    filename = filter_lines = project = root_path = nothing
     verbose = json_output = read_stdin = false
 
     i = 1
@@ -96,6 +96,8 @@ function (@main)(args::Vector{String})
         elseif arg == "--project"
             # Handle --project without equals sign (use current directory)
             project = "."
+        elseif startswith(arg, "--root-path=")
+            root_path = arg[13:end]
         elseif arg == "--verbose" || arg == "-v"
             verbose = true
         elseif arg == "--json"
@@ -134,7 +136,7 @@ function (@main)(args::Vector{String})
     end
 
     # Run tests
-    return runtest_app(filename, parsed_patterns, filter_lines, verbose, project, json_output, read_stdin)
+    return runtest_app(filename, parsed_patterns, filter_lines, verbose, project, json_output, read_stdin, root_path)
 end
 
 function print_usage()
@@ -161,6 +163,12 @@ function print_usage()
       --read-stdin              Read source for <path> from stdin instead of disk
                                 (<path> is still used for `@__FILE__`, error
                                 messages, and resolving `include`d files)
+      --root-path=<dir>         Fallback base directory for relative `include`
+                                paths when <path>'s `dirname` is empty (typical
+                                with stdin sources whose <path> is a virtual
+                                identifier such as an unsaved buffer name).
+                                Once an include is resolved into a real file,
+                                its own directory is used for nested includes
       -h, --help                Show this help message
 
     Examples:
@@ -381,7 +389,8 @@ function extract_diagnostics_from_exception(ex::Test.TestSetException)
 end
 
 function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project,
-                          source::Union{Nothing,String}=nothing)
+                          source::Union{Nothing,String}=nothing,
+                          root_path::Union{Nothing,String}=nothing)
     # Set `LOAD_PATH` manually: app shim sets limits it by default
     if Base.should_use_main_entrypoint()
         empty!(LOAD_PATH)
@@ -446,15 +455,42 @@ function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines,
         if source === nothing
             return Test.@testset "$bname" verbose=verbose Base.IncludeInto(topmodule)(filename)
         else
-            return Test.@testset "$bname" verbose=verbose Base.include_string(topmodule, source, filename)
+            # Resolve `filename` against `root_path` so relative `include` calls in `source`
+            # can find workspace files. We mirror `runtest`'s rule (see `handle_include`):
+            # only apply `root_path` when `filename` carries no directory component, so
+            # callers passing real paths keep their `dirname`-based resolution.
+            resolved_filename =
+                root_path !== nothing && isempty(dirname(filename)) ?
+                    joinpath(root_path, filename) : filename
+            return Test.@testset "$bname" verbose=verbose include_string_with_source_path(topmodule, source, resolved_filename)
         end
     else
-        return Test.@testset TestRunnerTestSet "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule, source)
+        return Test.@testset TestRunnerTestSet "$bname" verbose=verbose runtest(filename, patterns; filter_lines, topmodule, source, root_path)
     end
 end
 
-function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project,
-                      source::Union{Nothing,String}=nothing)
+# Wrap `Base.include_string` so nested `include` calls inside `source` resolve relative to
+# `filename`'s directory. `Base.include` does this via `task_local_storage[:SOURCE_PATH]`,
+# but `Base.include_string` does not, so we set it ourselves around the call.
+function include_string_with_source_path(mod::Module, source::AbstractString, filename::AbstractString)
+    tls = task_local_storage()
+    prev = get(tls, :SOURCE_PATH, nothing)
+    tls[:SOURCE_PATH] = filename
+    try
+        return Base.include_string(mod, source, filename)
+    finally
+        if prev === nothing
+            delete!(tls, :SOURCE_PATH)
+        else
+            tls[:SOURCE_PATH] = prev
+        end
+    end
+end
+
+function runtest_json(
+        filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project,
+        source::Union{Nothing,String}=nothing, root_path::Union{Nothing,String}=nothing
+    )
     # Redirect stdout to capture ALL output (including info_print, header_print, etc.)
     original_stdout = stdout
     (rd, wr) = redirect_stdout()
@@ -463,7 +499,7 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
     local diagnostics::Vector{TestRunnerDiagnostic} = TestRunnerDiagnostic[]
     start_time = time()
     try
-        result = runtest_internal(filename, patterns, filter_lines, verbose, project, source)
+        result = runtest_internal(filename, patterns, filter_lines, verbose, project, source, root_path)
         counts = Test.get_test_counts(result)
         n_passed = counts.passes + counts.cumulative_passes
         n_failed = counts.fails + counts.cumulative_fails
@@ -494,16 +530,19 @@ function runtest_json(filename::String, patterns::Vector{Any}, filter_lines, ver
     end
 end
 
-function runtest_app(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project, json_output::Bool, read_stdin::Bool=false)
+function runtest_app(
+        filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project, json_output::Bool,
+        read_stdin::Bool=false, root_path::Union{Nothing,String}=nothing
+    )
     source = read_stdin ? read(stdin, String) : nothing
     if source === nothing && !isfile(filename)
         error_print("File not found:", filename)
         return 1
     end
     if json_output
-        return runtest_json(filename, patterns, filter_lines, verbose, project, source)
+        return runtest_json(filename, patterns, filter_lines, verbose, project, source, root_path)
     else
-        runtest_internal(filename, patterns, filter_lines, verbose, project, source)
+        runtest_internal(filename, patterns, filter_lines, verbose, project, source, root_path)
         return 0
     end
 end
