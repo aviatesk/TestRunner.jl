@@ -445,7 +445,14 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
         changed |= LCU.add_control_flow!(concretized, src, cfg, postdomtree)
     end
 
-    LCU.add_active_gotos!(concretized, src, cfg, postdomtree)
+    # LCU v3.6+ requires SelectiveEvalController for add_active_gotos!.
+    if isdefined(LCU, :SelectiveEvalController)
+        LCU.add_active_gotos!(
+            concretized, src, cfg, postdomtree, LCU.SelectiveEvalController(),
+        )
+    else
+        LCU.add_active_gotos!(concretized, src, cfg, postdomtree)
+    end
 end
 
 # Add statements that use SSA values produced by already selected statements
