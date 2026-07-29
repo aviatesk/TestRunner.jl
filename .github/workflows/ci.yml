@@ -46,7 +46,7 @@ jobs:
             arch: x64
             precompile: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
@@ -61,7 +61,7 @@ jobs:
     name: JETLS check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: aviatesk/JETLS.jl/.github/actions/check@release
         with:
           files: src/TestRunner.jl
@@ -71,7 +71,7 @@ jobs:
     if: github.base_ref != 'release'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: "1"
