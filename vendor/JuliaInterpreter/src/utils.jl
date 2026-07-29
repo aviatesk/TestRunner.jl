@@ -14,6 +14,11 @@ function moduleof(@nospecialize(x))
     return isa(s, Module) ? s : s.module
 end
 
+# A frame executes top-level statements iff its scope is a Module. This cannot be inferred
+# from stack position: `:toplevel`/`:module` interpretation links module-scoped child frames
+# into the stack (see `step_toplevel!`), so a frame with a caller may still be toplevel.
+is_toplevel_frame(frame::Frame) = scopeof(frame) isa Module
+
 function Base.nameof(frame::Frame)
     s = frame.framecode.scope
     isa(s, Method) ? s.name : nameof(s)
@@ -21,20 +26,18 @@ end
 
 _Typeof(x) = isa(x, Type) ? Type{x} : typeof(x)
 
-function to_function(@nospecialize(x))
-    isa(x, GlobalRef) ? invokelatest(getfield, x.mod, x.name) : x
+function to_function(@nospecialize(x), world::UInt)
+    isa(x, GlobalRef) ? invoke_in_world(world, getglobal, x.mod, x.name) : x
 end
 
 """
-    method = whichtt(tt, mt = nothing)
+    method = whichtt(tt, mt=nothing; world=default_world())
 
 Like `which` except it operates on the complete tuple-type `tt`,
 and doesn't throw when there is no matching method.
 """
-function whichtt(@nospecialize(tt), mt::Union{Nothing,MethodTable}=nothing)
-    # TODO: provide explicit control over world age? In case we ever need to call "old" methods.
-    # TODO Use `CachedMethodTable` for better performance once `teh/worldage` is merged
-    match, _ = findsup_mt(tt, Base.get_world_counter(), mt)
+function whichtt(@nospecialize(tt), mt::Union{Nothing,MethodTable}=nothing; world::UInt=default_world())
+    match, _ = findsup_mt(tt, world, mt)
     match === nothing && return nothing
     return match.method
 end
@@ -56,6 +59,16 @@ end
 
 instantiate_type_in_env(arg, spsig::UnionAll, spvals::Vector{Any}) =
     ccall(:jl_instantiate_type_in_env, Any, (Any, Any, Ptr{Any}), arg, spsig, spvals)
+
+# Native `UndefVarError`s carry the scope of the missing binding (`:local`,
+# `:static_parameter`, ...) since Julia 1.11; match that so `@test_throws` and other
+# field-wise comparisons against natively-thrown errors succeed.
+@static if VERSION >= v"1.11"
+    undef_var_error(sym::Symbol, scope::Symbol) = UndefVarError(sym, scope)
+else
+    undef_var_error(sym::Symbol, scope::Symbol) = UndefVarError(sym)
+end
+undef_sparam_error(sym::Symbol) = undef_var_error(sym, :static_parameter)
 
 function sparam_syms(meth::Method)
     s = Symbol[]
@@ -154,16 +167,32 @@ Tests whether `g` is equal to `GlobalRef(mod, name)`.
 """
 is_global_ref(@nospecialize(g), mod::Module, name::Symbol) = isa(g, GlobalRef) && g.mod === mod && g.name == name
 
-function is_global_ref_egal(@nospecialize(g), name::Symbol, @nospecialize(ref))
+function is_global_ref_egal(@nospecialize(g), name::Symbol, @nospecialize(ref), world::UInt=default_world())
     # Identifying GlobalRefs regardless of how the caller scopes them
     isa(g, GlobalRef) || return false
     g.name === name || return false
-    gref = getglobal(g.mod, g.name)
+    # Resolve in `world`, not the ambient task world (which may predate the binding),
+    # and treat an unresolvable binding as not-equal rather than throwing.
+    invoke_in_world(world, isdefinedglobal, g.mod, g.name) || return false
+    gref = invoke_in_world(world, getglobal, g.mod, g.name)
     return gref === ref
 end
 
 is_quotenode(@nospecialize(q), @nospecialize(val)) = isa(q, QuoteNode) && q.value == val
 is_quotenode_egal(@nospecialize(q), @nospecialize(val)) = isa(q, QuoteNode) && q.value === val
+
+function is_define_method_call(@nospecialize(stmt))
+    @static isdefinedglobal(Core, :define_method) || return false
+    isexpr(stmt, :call) || return false
+    f = stmt.args[1]
+    return f === Core.define_method || is_global_ref(f, Core, :define_method) ||
+           is_quotenode_egal(f, Core.define_method)
+end
+
+is_methoddef1(@nospecialize(stmt)) = isexpr(stmt, :method, 1) ||
+                                      (is_define_method_call(stmt) && length(stmt.args) == 3)
+is_methoddef3(@nospecialize(stmt)) = isexpr(stmt, :method, 3) ||
+                                      (is_define_method_call(stmt) && length(stmt.args) == 5)
 
 function is_quoted_type(@nospecialize(a), name::Symbol)
     if isa(a, QuoteNode)
@@ -223,7 +252,7 @@ end
 
 is_generated(meth::Method) = isdefined(meth, :generator)
 
-get_staged(mi::MethodInstance) = Core.Compiler.get_staged(mi, Base.get_world_counter())
+get_staged(mi::MethodInstance, world::UInt) = Core.Compiler.get_staged(mi, world)
 
 """
     is_doc_expr(ex)
@@ -294,6 +323,22 @@ end
 
 @static if VERSION ≥ v"1.12.0-DEV.173"
 
+getfirstline(arg) = getfirstline(linetable(arg))
+function getfirstline(debuginfo::Core.DebugInfo)
+    while true
+        ltnext = debuginfo.linetable
+        ltnext === nothing && break
+        debuginfo = ltnext
+    end
+    firstline = typemax(Int)
+    for k = 0:typemax(Int)
+        codeloc = Core.Compiler.getdebugidx(debuginfo, k)
+        line::Int = codeloc[1]
+        line < 0 && break
+        line > 0 && (firstline = min(firstline, line))
+    end
+    return firstline == typemax(Int) ? 0 : firstline
+end
 getlastline(arg) = getlastline(linetable(arg))
 function getlastline(debuginfo::Core.DebugInfo)
     while true
@@ -372,6 +417,22 @@ function firstline(ex::Expr)
     return nothing
 end
 
+# A toplevel-surface framecode carries its line info in the `LineNumberNode`s of the surface
+# statements themselves; the synthetic `CodeInfo`'s line table is an unrelated skeleton (see
+# `toplevel_codeinfo`). Return the most recent `LineNumberNode` at or before `pc`, or `nothing`.
+function toplevel_surface_lnn(framecode::FrameCode, pc::Int)
+    code = framecode.src.code
+    for i in min(pc, length(code)):-1:1
+        stmt = code[i]
+        isa(stmt, LineNumberNode) && return stmt
+        if isa(stmt, Expr)
+            lnn = firstline(stmt)
+            lnn !== nothing && return lnn
+        end
+    end
+    return nothing
+end
+
 """
     loc = whereis(frame, pc::Int=frame.pc; macro_caller=false)
 
@@ -383,6 +444,11 @@ definition, but with`macro_caller=true` you can obtain the location within the
 method that issued the macro.
 """
 function CodeTracking.whereis(framecode::FrameCode, pc::Int; kwargs...)
+    if framecode.is_toplevel_surface
+        lnn = toplevel_surface_lnn(framecode, pc)
+        (lnn === nothing || lnn.file === nothing) && return nothing
+        return (getfile(lnn), getline(lnn))
+    end
     codeloc = codelocation(framecode.src, pc)
     codeloc == 0 && return nothing
     m = framecode.scope
@@ -403,23 +469,33 @@ is the location at the time the method was most recently defined.
 See [`CodeTracking.whereis`](@ref) for dynamic line information.
 """
 function linenumber(framecode::FrameCode, pc)
+    if framecode.is_toplevel_surface
+        return getline(toplevel_surface_lnn(framecode, pc))
+    end
     codeloc = codelocation(framecode.src, pc)
     codeloc == 0 && return nothing
-    return getline(linetable(framecode, codeloc))
+    lineinfo = linetable(framecode, codeloc)
+    return lineinfo === nothing ? nothing : getline(lineinfo)
 end
 linenumber(frame::Frame, pc=frame.pc) = linenumber(frame.framecode, pc)
 
 function getfile(framecode::FrameCode, pc)
+    if framecode.is_toplevel_surface
+        lnn = toplevel_surface_lnn(framecode, pc)
+        (lnn === nothing || lnn.file === nothing) && return nothing
+        return getfile(lnn)
+    end
     codeloc = codelocation(framecode.src, pc)
     codeloc == 0 && return nothing
-    return getfile(linetable(framecode, codeloc))
+    lineinfo = linetable(framecode, codeloc)
+    return lineinfo === nothing ? nothing : getfile(lineinfo)
 end
 getfile(frame::Frame, pc=frame.pc) = getfile(frame.framecode, pc)
 
 function codelocation(code::CodeInfo, idx::Int)
     idx′ = idx
     # look ahead if we are on a meta line
-    while idx′ < length(code.code)
+    while idx′ <= length(code.code)
         codeloc = codelocs(code, idx′)
         codeloc == 0 || return codeloc
         ex = code.code[idx′]
@@ -442,7 +518,7 @@ function compute_corrected_linerange(method::Method)
     _, line1 = whereis(method)
     offset = line1 - method.line
     @assert !is_generated(method)
-    src = JuliaInterpreter.get_source(method)
+    src = get_source(method)
     lastline = getlastline(src)
     return line1:lastline + offset
 end
@@ -694,6 +770,17 @@ function extract_usage!(s::Set{Symbol}, @nospecialize expr)
     return s
 end
 
+function flatten_toplevel!(args::Vector{Any}, @nospecialize(ex))
+    if isexpr(ex, :toplevel)
+        for a in (ex::Expr).args
+            flatten_toplevel!(args, a)
+        end
+    else
+        push!(args, ex)
+    end
+    return args
+end
+
 function eval_code(frame::Frame, command::AbstractString)
     expr = Base.parse_input_line(command)
     expr === nothing && return nothing
@@ -702,10 +789,11 @@ end
 function eval_code(frame::Frame, expr::Expr)
     code = frame.framecode
     data = frame.framedata
-    isexpr(expr, :toplevel) && (expr = expr.args[end])
-
     if isexpr(expr, :toplevel)
-        expr = Expr(:block, expr.args...)
+        # Flatten (possibly nested) `:toplevel` wrappers into a single block:
+        # `parse_input_line` wraps multi-statement input in a nested `:toplevel`, and an
+        # embedded `:toplevel` cannot be lowered inside the `let` built below.
+        expr = Expr(:block, flatten_toplevel!(Any[], expr)...)
     end
 
     used_symbols = Set{Symbol}((Symbol("#self#"),))
@@ -725,11 +813,13 @@ function eval_code(frame::Frame, expr::Expr)
             Expr(:tuple, res, Expr(:tuple, [v.name for v in vars]...))
         ))
     eval_res, res = Core.eval(moduleof(frame), eval_expr)
-    j = 1
     for (i, v) in enumerate(vars)
         if v.isparam
-            data.sparams[j] = res[i]
-            j += 1
+            # `vars` only holds the variables used by `expr`, so look the static parameter
+            # up by name; a running counter would write into the wrong slot whenever an
+            # earlier sparam is not referenced.
+            j = findfirst(==(v.name), sparam_syms(code.scope::Method))
+            j === nothing || (data.sparams[j] = res[i])
         elseif v.is_captured_closure
             selfidx = findfirst(v -> v.name === Symbol("#self#"), vars)
             @assert selfidx !== nothing
@@ -744,7 +834,14 @@ function eval_code(frame::Frame, expr::Expr)
             idx = argmax(data.last_reference[slot_indices])
             slot_idx = slot_indices[idx]
             data.last_reference[slot_idx] = (frame.assignment_counter += 1)
-            data.locals[slot_idx] = Some{Any}(v.value isa Core.Box ? Core.Box(res[i]) : res[i])
+            if v.value isa Core.Box
+                # Mutate the existing Box in place: closures that captured the variable
+                # hold a reference to this same Box and must observe the new value.
+                v.value.contents = res[i]
+                data.locals[slot_idx] = Some{Any}(v.value)
+            else
+                data.locals[slot_idx] = Some{Any}(res[i])
+            end
         end
     end
     eval_res
@@ -780,7 +877,14 @@ function Base.StackTraces.StackFrame(frame::Frame)
         argt = Tuple{mapany(_Typeof, method_args)...}
         sig = method.sig
         atype, sparams = ccall(:jl_type_intersection_with_env, Any, (Any, Any), argt, sig)::SimpleVector
-        mi = Core.Compiler.specialize_method(method, atype, sparams::SimpleVector)
+        if atype === Union{}
+            # The recorded argument values may not match the method signature
+            # (e.g. while displaying a MethodError); `specialize_method` would
+            # throw on an empty intersection (issue #573).
+            mi = method
+        else
+            mi = Core.Compiler.specialize_method(method, atype, sparams::SimpleVector)
+        end
         fname = method.name
     else
         mi = frame.framecode.src
@@ -788,7 +892,7 @@ function Base.StackTraces.StackFrame(frame::Frame)
     end
     Base.StackFrame(
         fname,
-        Symbol(getfile(frame)),
+        Symbol(@something(getfile(frame), :none)),
         @something(linenumber(frame), getfirstline(frame)),
         mi,
         false,
@@ -800,7 +904,7 @@ function Base.show_backtrace(io::IO, frame::Frame)
     stackframes = Tuple{Base.StackTraces.StackFrame, Int}[]
     while frame !== nothing
         push!(stackframes, (Base.StackTraces.StackFrame(frame), 1))
-        frame = JuliaInterpreter.caller(frame)
+        frame = caller(frame)
     end
     print(io, "\nStacktrace:")
     try invokelatest(Base.update_stackframes_callback[], stackframes) catch end
@@ -809,7 +913,11 @@ function Base.show_backtrace(io::IO, frame::Frame)
     for (i, (last_frame, n)) in enumerate(stackframes)
         frame_counter += 1
         println(io)
-        Base.print_stackframe(io, i, last_frame, n, nd, Base.info_color())
+        @static if VERSION >= v"1.13.0-DEV.927"
+            Base.print_stackframe(io, i, last_frame, nd, 0, 0, 0, Base.info_color())
+        else
+            Base.print_stackframe(io, i, last_frame, n, nd, Base.info_color())
+        end
     end
 end
 

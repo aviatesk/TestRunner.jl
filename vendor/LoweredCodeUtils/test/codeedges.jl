@@ -3,7 +3,7 @@ module codeedges
 using LoweredCodeUtils
 using LoweredCodeUtils.JuliaInterpreter
 using LoweredCodeUtils: CC
-using LoweredCodeUtils: callee_matches, istypedef, exclude_named_typedefs
+using LoweredCodeUtils: callee_matches, istypedef, exclude_named_typedefs, is_defaultctors_call
 using JuliaInterpreter: is_global_ref, is_quotenode
 using Test
 
@@ -15,6 +15,7 @@ function hastrackedexpr(@nospecialize(stmt))
             haseval = f === :eval || (callee_matches(f, Base, :getproperty) && is_quotenode(stmt.args[2], :eval))
             callee_matches(f, Core, :_typebody!) && return true, haseval
             callee_matches(f, Core, :_setsuper!) && return true, haseval
+            LoweredCodeUtils.is_define_method_ref(f) && return true, haseval
             f === :include && return true, haseval
         elseif stmt.head === :thunk
             any(s->any(hastrackedexpr(s)), stmt.args[1].code) && return true, haseval
@@ -86,6 +87,24 @@ module ModSelective end
     isrequired = lines_required(GlobalRef(ModSelective, :k), src, edges)
     selective_eval_fromstart!(frame, isrequired, #=istoplevel=#true)
     @test ModSelective.k != ModEval.k
+
+    @static if isdefined(Test, Symbol("@with_testset"))
+        let src = Meta.lower(@__MODULE__, :(@testset begin f() = 1 end)).args[1]
+            enteridx = findfirst(src.code) do stmt
+                stmt isa Core.EnterNode && isdefined(stmt, :scope)
+            end
+            @test enteridx !== nothing
+            if enteridx !== nothing
+                scope = (src.code[enteridx]::Core.EnterNode).scope
+                @test scope isa Core.SSAValue
+                if scope isa Core.SSAValue
+                    links = LoweredCodeUtils.CodeLinks(@__MODULE__, src)
+                    @test scope.id in links.ssapreds[enteridx].ssas
+                    @test enteridx in links.ssasuccs[scope.id].ssas
+                end
+            end
+        end
+    end
 
     # Control-flow
     ex = quote
@@ -217,13 +236,56 @@ module ModSelective end
     @test ModSelective.k11 == 0
     @test 3 <= ModSelective.s11 <= 15
 
+    # Final block is not a `return`: Need to use `controller::SelectiveEvalController` explicitly
+    ex = quote
+        x = 1
+        yy = 7
+        @label loop
+        x += 1
+        x < 5 || return yy
+        @goto loop
+    end
+    frame = Frame(ModSelective, ex)
+    src = frame.framecode.src
+    edges = CodeEdges(ModSelective, src)
+    controller = SelectiveEvalController()
+    isrequired = lines_required(GlobalRef(ModSelective, :x), src, edges, controller)
+    selective_eval_fromstart!(
+        LoweredCodeUtils.RecursiveInterpreter(), frame, isrequired, controller, true)
+    @test ModSelective.x == 5
+    @test !isdefined(ModSelective, :yy)
+
+    # Inactive statements at the beginning of a terminal block shouldn't terminate
+    # selective evaluation before later required statements in the same block.
+    let mod = Module(:ModTerminationPointAfterRequired)
+        Core.eval(mod, :(hits = Int[]))
+        ex = quote
+            if Base.inferencebarrier(true)
+                branch_value = 1
+            end
+            push!(hits, 1) # should not be called
+            push!(hits, 2)
+        end
+        frame = Frame(mod, ex)
+        src = frame.framecode.src
+        edges = CodeEdges(mod, src)
+        controller = SelectiveEvalController()
+        isrequired = fill(false, length(src.code))
+        targetidx = findlast(stmt -> Meta.isexpr(stmt, :call), src.code) # the second push!
+        isrequired[targetidx] = true
+        lines_required!(isrequired, (GlobalRef(mod, :branch_value),), src, edges, controller)
+        selective_eval_fromstart!(
+            LoweredCodeUtils.RecursiveInterpreter(), frame, isrequired, controller, true)
+        @test @invokelatest(mod.branch_value) == 1
+        @test @invokelatest(mod.hits) == [2]
+    end
+
     # Control-flow in an abstract type definition
     ex = :(abstract type StructParent{T, N} <: AbstractArray{T, N} end)
     frame = Frame(ModSelective, ex)
     src = frame.framecode.src
     edges = CodeEdges(ModSelective, src)
     # Check that the StructParent name is discovered everywhere it is used
-    var = edges.byname[GlobalRef(ModSelective, :StructParent)]
     isrequired = minimal_evaluation(hastrackedexpr, src, edges)
     selective_eval_fromstart!(frame, isrequired, #=istoplevel=#true)
     @test supertype(ModSelective.StructParent) === AbstractArray
@@ -245,7 +307,7 @@ module ModSelective end
     isrequired = minimal_evaluation(src, edges) do @nospecialize stmt
         # initially mark only the constructor
         @static if VERSION ≥ v"1.12-"
-            return (Meta.isexpr(stmt, :call) && stmt.args[1] == GlobalRef(Core, :_defaultctors), false)
+            return (is_defaultctors_call(stmt), false)
         else
             return (LoweredCodeUtils.ismethod_with_name(src, stmt, "NoParam"), false)
         end
@@ -253,6 +315,31 @@ module ModSelective end
     selective_eval_fromstart!(frame, isrequired, #=istoplevel=#true)
     let NoParam = @invokelatest ModSelective.NoParam
         @test isa(NoParam(), NoParam)
+    end
+
+    # Requiring a type definition must include its generated default constructors.
+    @static if VERSION ≥ v"1.12-"
+        let mod = Module(:ModRequiredDefaultConstructors)
+            src = Meta.lower(mod, quote
+                struct WithDefaultConstructor
+                    value
+                end
+                struct UnrelatedDefaultConstructor
+                    value
+                end
+            end).args[1]
+            edges = CodeEdges(mod, src)
+            isrequired = lines_required(findfirst(istypedef, src.code), src, edges)
+            ctorpcs = findall(is_defaultctors_call, src.code)
+            @test length(ctorpcs) == 2
+            @test isrequired[first(ctorpcs)]
+            @test !isrequired[last(ctorpcs)]
+            selective_eval_fromstart!(Frame(mod, src), isrequired, true)
+            T = @invokelatest mod.WithDefaultConstructor
+            value = Base.invokelatest(T, 7)
+            @test value.value == 7
+            @test !isdefined(mod, :UnrelatedDefaultConstructor)
+        end
     end
 
     # Parametric
@@ -267,7 +354,7 @@ module ModSelective end
     isrequired = minimal_evaluation(src, edges) do @nospecialize stmt
         # initially mark only the constructor
         @static if VERSION ≥ v"1.12-"
-            return (Meta.isexpr(stmt, :call) && stmt.args[1] == GlobalRef(Core, :_defaultctors), false)
+            return (is_defaultctors_call(stmt), false)
         else
             return (LoweredCodeUtils.ismethod_with_name(src, stmt, "Struct"), false)
         end
@@ -303,10 +390,10 @@ module ModSelective end
     edges = CodeEdges(ModSelective, src)
     isrequired = fill(false, length(src.code))
     let j = length(src.code) - 1
-        while !Meta.isexpr(src.code[j], :method, 3)
+        while !LoweredCodeUtils.ismethod3(src.code[j])
             j -= 1
         end
-        @assert Meta.isexpr(src.code[j], :method, 3)
+        @assert LoweredCodeUtils.ismethod3(src.code[j])
         isrequired[j] = true
     end
     lines_required!(isrequired, src, edges)
@@ -361,7 +448,7 @@ module ModSelective end
     end)
     src = thk.args[1]
     edges = CodeEdges(Main, src)
-    idx = findfirst(@nospecialize(stmt)->Meta.isexpr(stmt, :method), src.code)
+    idx = findfirst(LoweredCodeUtils.ismethod, src.code)
     lr = lines_required(idx, src, edges; norequire=exclude_named_typedefs(src, edges))
     idx = findfirst(@nospecialize(stmt)->Meta.isexpr(stmt, :(=)) && Meta.isexpr(stmt.args[2], :call) && is_global_ref(stmt.args[2].args[1], Core, :Box), src.code)
     @test lr[idx]
@@ -512,6 +599,35 @@ end
         )
 
         check_toplevel_definition_interprete(ex, defs, undefs)
+    end
+end
+
+# Typegroup blocks (Julia versions where `Core.resolve_typegroup` exists).
+# Ordinary structs also lower through the typegroup mechanism on Julia ≥ 1.14
+# and are covered by the cases above; this checks a multi-type group, which has
+# no leading `global` marker and defines several names from one statement range.
+@static if isdefined(Core, :resolve_typegroup)
+    @testset "typegroup blocks" begin
+        m = Module(:TypegroupMock)
+        ex = Expr(:typegroup, Expr(:block,
+            :(struct TGA; b::Union{TGB,Nothing}; end),
+            :(struct TGB; a::TGA; end)))
+        lwr = Meta.lower(m, ex)
+        if lwr isa Expr && lwr.head === :thunk &&
+                any(LoweredCodeUtils.is_resolve_typegroup_call, (first(lwr.args)::Core.CodeInfo).code)
+            src = first(lwr.args)::Core.CodeInfo
+            edges = CodeEdges(m, src)
+            idx = findfirst(LoweredCodeUtils.is_resolve_typegroup_call, src.code)
+            @test istypedef(src.code[idx])
+            blocks, names = LoweredCodeUtils.find_typedefs(src)
+            @test names == [:TGA, :TGB]
+            @test length(blocks) == 2 && blocks[1] == blocks[2]
+            isrq = lines_required!(istypedef.(src.code), src, edges)
+            selective_eval_fromstart!(Frame(m, src), isrq, #=istoplevel=#true)
+            @test @invokelatest(isdefined(m, :TGA))
+            @test @invokelatest(isdefined(m, :TGB))
+            @test @invokelatest(fieldtype(m.TGB, :a)) === @invokelatest(m.TGA)
+        end
     end
 end
 

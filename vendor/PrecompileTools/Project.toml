@@ -1,6 +1,6 @@
 name = "PrecompileTools"
 uuid = "34277385-dbfe-5e9c-a5da-1fda53d5b4c9"
-version = "1.3.3"
+version = "1.3.4"
 authors = ["Tim Holy <tim.holy@gmail.com>", "t-bltg <tf.bltg@gmail.com>", "and contributors"]
 
 [deps]
@@ -21,6 +21,4 @@ Preferences = "1"
 test = ["InteractiveUtils", "Pkg", "Test", "UUIDs"]
 
 [sources.Preferences]
-subdir = "vendor/Preferences"
-rev = "d79c4a521efef5e8572419dce184a4b74931397c"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../Preferences"

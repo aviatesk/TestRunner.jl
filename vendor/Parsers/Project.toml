@@ -1,7 +1,7 @@
 name = "Parsers"
 uuid = "e996d0cc-5495-5f06-b9fe-87f07f942bbe"
 authors = ["quinnj <quinn.jacobd@gmail.com>"]
-version = "2.8.4"
+version = "2.8.6"
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -26,6 +26,4 @@ UUIDs = "1.6"
 test = ["Aqua", "Serialization", "Test"]
 
 [sources.PrecompileTools]
-subdir = "vendor/PrecompileTools"
-rev = "d79c4a521efef5e8572419dce184a4b74931397c"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../PrecompileTools"

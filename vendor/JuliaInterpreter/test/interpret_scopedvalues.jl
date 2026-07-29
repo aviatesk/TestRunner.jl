@@ -52,4 +52,25 @@ let frame = JuliaInterpreter.enter_call() do
     @test (2, 3) == @with sval1 => 2 sval2 => 3 JuliaInterpreter.finish_and_return!(frame)
 end
 
+# Under an active dynamic scope, a native call is run via `Core.eval` of a scope-installing
+# expression. Its arguments must be spliced as literal values: an AST-significant argument
+# such as the `Symbol` in `string(:abcsym)` would otherwise be re-evaluated as a variable
+# reference and throw `UndefVarError(:abcsym)`.
+symarg_func() = string(:abcsym)
+let frame = JuliaInterpreter.enter_call(symarg_func)
+    @test "abcsym" == @with sval1 => 2 JuliaInterpreter.finish_and_return!(NonRecursiveInterpreter(), frame)
+end
+
+# ScopedValue state must not leak when an exception unwinds out of an @with block
+const sval_leak = ScopedValue(1)
+sval_leak_f() = try
+    @with sval_leak => 2 begin
+        error("boom")
+    end
+catch
+    sval_leak[]
+end
+@test sval_leak_f() == 1
+@test 1 == @interpret sval_leak_f()
+
 end # module interpret_scopedvalues
