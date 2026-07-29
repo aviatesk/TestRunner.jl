@@ -21,6 +21,30 @@ const LT{T} = Union{LVec{<:Any, T}, T}
 const FloatingTypes = Union{Float32, Float64}
 end
 
+# Stuff for https://github.com/timholy/Revise.jl/issues/706
+module Lowering706
+ran = Ref(0)
+end
+
+# Stuff for testing signature resolution when the calling task runs in an older world age
+# than the one the method was defined in (Revise drives signature extraction pinned to its
+# frozen `__init__` world via `invoke_in_world`; see Revise issue #552).
+module LoweringWorldAge
+function fworld end   # forward-declare the binding so it predates the world snapshot taken in the test
+end
+
+# Extract signatures from `ex`. Both this and `extract_signatures_in_world` are defined at top
+# level (not as closures at the call site) so they predate the world snapshot taken in the test
+# and are reachable by `invoke_in_world`.
+function collect_signatures(mod::Module, ex::Expr)
+    frame = Frame(mod, ex)
+    sigs = MethodInfoKey[]
+    methoddefs!(sigs, frame; define=false)
+    return sigs
+end
+extract_signatures_in_world(mod::Module, ex::Expr, w::UInt) =
+    Base.invoke_in_world(w, collect_signatures, mod, ex)
+
 bodymethtest0(x) = 0
 function bodymethtest0(x)
     y = 2x
@@ -163,6 +187,33 @@ bodymethtest5(x, y=Dict(1=>2)) = 5
     ret = methoddef!(empty!(signatures), frame; define=true)
     @test !isempty(signatures)
     @test isa(ret, NTuple{2,Int})
+
+    # A bare `function foo end` only forward-declares `foo`; when its real definition is
+    # separated from it by unrelated top-level code, extracting signatures must not march
+    # through and execute that intervening code (https://github.com/timholy/Revise.jl/issues/706).
+    ex = quote
+        function fwd706 end
+        ran[] += 1            # unrelated top-level code that must not run while collecting signatures
+        unrelated706() = 1    # an unrelated, differently-named method
+        fwd706() = 2          # the real definition, after the intervening code
+    end
+    Core.eval(Lowering706, ex)   # mimic an already-loaded module, as when re-extracting signatures
+    Lowering706.ran[] = 0
+    frame = Frame(Lowering706, ex)
+    rename_framemethods!(frame)
+    ret = methoddef!(empty!(signatures), frame; define=false)
+    @test ret === nothing
+    @test Lowering706.ran[] == 0
+
+    # Signature resolution must use the latest committed world, not the calling task's
+    # world: a method may live in a newer world than the task driving extraction (Revise
+    # revises pinned to its frozen `__init__` world via `invoke_in_world`; see Revise #552).
+    wld = Base.get_world_counter()
+    Core.eval(LoweringWorldAge, :(fworld(x::Int) = 1))   # define the method in a newer world
+    @test Base.get_world_counter() > wld
+    sigs_world = extract_signatures_in_world(LoweringWorldAge, :(fworld(x::Int) = 1), wld)
+    @test length(sigs_world) == 1
+    @test only(sigs_world) == MethodInfoKey(nothing, which(LoweringWorldAge.fworld, Tuple{Int}).sig)
 
     # Anonymous functions in method signatures
     ex = :(max_values(T::Union{map(X -> Type{X}, Base.BitIntegerSmall_types)...}) = 1 << (8*sizeof(T)))  # base/abstractset.jl
@@ -414,9 +465,10 @@ bodymethtest5(x, y=Dict(1=>2)) = 5
     oldenv = Pkg.project().path
     try
         # we test with the old version of CBinding, let's do it in an isolated environment
+        # so we don't cause package conflicts with everything else
         Pkg.activate(; temp=true, io=devnull)
 
-        @info "Adding CBinding to the environment for test purposes"
+        @info "Adding CBinding v0.9.4 to the environment for test purposes"
         Pkg.add(; name="CBinding", version="0.9.4", io=devnull) # `@cstruct` isn't defined for v1.0 and above
 
         m = Module()
@@ -507,6 +559,8 @@ end
 module ExternalMT
     Base.Experimental.@MethodTable method_table
     macro overlay(ex) esc(:(Base.Experimental.@overlay $method_table $ex)) end
+    get_method_table() = method_table
+    macro overlay_call(ex) esc(:(Base.Experimental.@overlay get_method_table() $ex)) end
 end
 
 @testset "Support for external method tables" begin
@@ -536,6 +590,30 @@ end
     (mt, sig) = pop!(signatures)
     @test (mt, sig) === (ExternalMT.method_table, Tuple{typeof(ExternalMT.foo), Int64})
     LoweredCodeUtils.identify_framemethod_calls(frame) # make sure this does not throw
+
+    # Exercise a method-table value computed by an inline call.
+    ex = :(@overlay_call foo(x::Float64) = "computed overlay")
+    Core.eval(ExternalMT, ex)
+    frame = Frame(ExternalMT, ex)
+    methoddefs!(signatures, frame; define = false)
+    @test length(signatures) == 1
+    (mt, sig) = pop!(signatures)
+    @test (mt, sig) === (ExternalMT.method_table, Tuple{typeof(ExternalMT.foo), Float64})
+end
+
+@testset "normalize_defsig with a quoted Symbol callee (issue Revise#914)" begin
+    # A quoted Symbol is already a name and must not be passed to `nameof`.
+    @test LoweredCodeUtils.normalize_defsig(QuoteNode(:length), Main) === GlobalRef(Main, :length)
+
+    # A method body containing a call to a quoted symbol, e.g. `:length(list)`,
+    # lowers to a `:call` whose callee is `QuoteNode(:length)`. Walking it must
+    # not throw.
+    ex = :(function f_rvs914(list)
+               m = zeros(3, 3)
+               m[:, :length(list)]
+           end)
+    frame = Frame(Main, ex)
+    @test LoweredCodeUtils.identify_framemethod_calls(frame) isa Any  # must not throw
 end
 
 end # module signatures

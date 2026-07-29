@@ -107,10 +107,14 @@ struct Squarer end
     # Breakpoints by file/line
     remove()
     method = which(JuliaInterpreter.locals, Tuple{Frame})
+    # JuliaInterpreter's own module is in `compiled_modules` (issue #228), so opt this
+    # method back into interpretation to let the file/line breakpoint fire.
+    push!(JuliaInterpreter.interpreted_methods, method)
     breakpoint(String(method.file), method.line+1)
     frame = JuliaInterpreter.enter_call(loop_radius2, 2)
     ret = @interpret JuliaInterpreter.locals(frame)
     @test isa(ret, Tuple{Frame,JuliaInterpreter.BreakpointRef})
+    delete!(JuliaInterpreter.interpreted_methods, method)
     # Test kwarg method
     remove()
     bp = breakpoint(tmppath, 3)
@@ -246,11 +250,13 @@ mktemp() do path, io
     close(io)
     breakpoint(path, 3)
     include(path)
-    frame, bp = @interpret somefunc(2, 3)
+    # `somefunc` is defined by `include` in a world later than this closure's, so the calls
+    # must be resolved in the latest world to see it (issue #617).
+    frame, bp = @interpret world=:latest somefunc(2, 3)
     @test bp isa BreakpointRef
     @test whereis(frame) == (path, 3)
     breakpoint(path, 2)
-    frame, bp = @interpret somefunc(2, 3)
+    frame, bp = @interpret world=:latest somefunc(2, 3)
     @test bp isa BreakpointRef
     @test whereis(frame) == (path, 2)
     remove()
@@ -258,13 +264,13 @@ mktemp() do path, io
     mktempdir(dirname(path)) do tmp
         cd(tmp) do
             breakpoint(joinpath("..", basename(path)), 3)
-            frame, bp = @interpret somefunc(2, 3)
+            frame, bp = @interpret world=:latest somefunc(2, 3)
             @test bp isa BreakpointRef
             @test whereis(frame) == (path, 3)
             remove()
             breakpoint(joinpath("..", basename(path)), 3)
             cd(homedir()) do
-                frame, bp = @interpret somefunc(2, 3)
+                frame, bp = @interpret world=:latest somefunc(2, 3)
                 @test bp isa BreakpointRef
                 @test whereis(frame) == (path, 3)
             end
@@ -475,6 +481,9 @@ struct Constructor
     x::Int
 end
 Constructor(x::AbstractString, y::Int) = Constructor(x)
+struct ParametricConstructor{T}
+    x::T
+end
 
 @testset "constructors" begin
     breakpoint(Constructor, Tuple{String, Int})
@@ -485,6 +494,19 @@ Constructor(x::AbstractString, y::Int) = Constructor(x)
     breakpoint(Constructor)
     frame, bp = @interpret Constructor(2)
     @test bp isa BreakpointRef
+
+    # issue #525: a breakpoint on the type must also fire for parameterized calls
+    remove()
+    breakpoint(ParametricConstructor)
+    frame, bp = @interpret ParametricConstructor{Int}(2)
+    @test bp isa BreakpointRef
+    frame, bp = @interpret ParametricConstructor(2)
+    @test bp isa BreakpointRef
+    remove()
+    # ... and a breakpoint on an unrelated type must not fire
+    breakpoint(Constructor)
+    @test @interpret(ParametricConstructor(2)) isa ParametricConstructor
+    remove()
 end
 
 @testset "test breaking on a line with no statement" begin
@@ -568,15 +590,17 @@ end
         flush(io)
         include(path)
 
+        # `f_check` is defined by `include` in a world later than this closure's, so the
+        # calls must be resolved in the latest world to see it (issue #617).
         with_logger(NullLogger()) do
-            frame, bp = @interpret f_check(1)
+            frame, bp = @interpret world=:latest f_check(1)
             file, ln = whereis(frame)
             @test file == path # Should not have stopped in logging.jl at line `line_logging`
             @test ln == line_logging
             remove(bp_f)
-            @test (@interpret f_check(1)) == 1
-            breakpoint(f_check, line_logging)
-            frame, bp = @interpret f_check(1)
+            @test (@interpret world=:latest f_check(1)) == 1
+            breakpoint(invokelatest(() -> f_check), line_logging)
+            frame, bp = @interpret world=:latest f_check(1)
             file, ln = whereis(frame)
             @test file == path # Should not have stopped in logging.jl at line `line_logging`
             @test ln == line_logging
@@ -600,4 +624,168 @@ end
     g3() = fkw3(7; x=1)
     frame, bp = @interpret g3()
     @test isa(frame, Frame) && isa(bp, JuliaInterpreter.BreakpointRef)
+end
+
+module BPResumeToplevel
+callee(x) = 2x
+end
+
+@testset "breakpoint resume in direct toplevel frames" begin
+    # Module-scoped frames created by direct `:toplevel` interpretation have a caller, so the
+    # resume machinery must identify them as toplevel by scope, not by stack position: the
+    # interrupted thunk still contains `:latestworld`/`:method` statements to execute.
+    # Distinct values per scenario keep each run's assertions independent of the previous run.
+    resume_stmts(x, y) = Any[
+        :(a = callee($x)),
+        :(begin b = callee($y); k() = $x + $y; c = k() end),   # `:method` after the call, same thunk
+        :(d = k() + 1),
+    ]
+    getglob(name) = invokelatest(getproperty, BPResumeToplevel, name)
+    breakpoint(BPResumeToplevel.callee)
+    try
+        # Resume with `:c` (`finish_stack!`)
+        frame = Frame(BPResumeToplevel, Expr(:toplevel, resume_stmts(3, 4)...))
+        ret = JuliaInterpreter.debug_command(frame, :c, true)
+        nhits = 0
+        while ret !== nothing && nhits < 10
+            leafframe, bp = ret
+            @test bp isa JuliaInterpreter.BreakpointRef
+            nhits += 1
+            ret = JuliaInterpreter.debug_command(leafframe, :c, true)
+        end
+        @test nhits == 2
+        @test getglob(:a) == 6
+        @test getglob(:b) == 8
+        @test getglob(:c) == 7
+        @test getglob(:d) == 8
+
+        # Resume with `:finish` and `:n` (`maybe_reset_frame!`): `:finish` returns from the
+        # callee into the interrupted thunk, then `:n` steps the toplevel frames to completion.
+        frame = Frame(BPResumeToplevel, Expr(:toplevel, resume_stmts(5, 6)...))
+        leafframe, bp = JuliaInterpreter.debug_command(frame, :c, true)      # first hit
+        leafframe, bp = JuliaInterpreter.debug_command(leafframe, :c, true)  # second hit, mid-thunk
+        ret = JuliaInterpreter.debug_command(leafframe, :finish, true)
+        nsteps = 0
+        while ret !== nothing && (nsteps += 1) < 50
+            fr, pc = ret
+            @test !isa(pc, JuliaInterpreter.BreakpointRef)
+            ret = JuliaInterpreter.debug_command(fr, :n, true)
+        end
+        @test nsteps < 50
+        @test getglob(:a) == 10
+        @test getglob(:b) == 12
+        @test getglob(:c) == 11
+        @test getglob(:d) == 12
+    finally
+        remove()
+    end
+end
+
+@testset "Showing a module-qualified condition" begin
+    remove()
+    showcond_f(x) = x
+    bp = breakpoint(showcond_f, (Main, :(x > 0)))
+    @test occursin("x > 0", sprint(show, bp))
+    remove()
+end
+
+@testset "breakpoints() does not leak the registry" begin
+    remove()
+    registry_bp_f(x) = x
+    fr = JuliaInterpreter.enter_call(registry_bp_f, 1)
+    breakpoint(registry_bp_f)
+    empty!(JuliaInterpreter.breakpoints())
+    @test length(JuliaInterpreter.breakpoints()) == 1
+    remove()
+    @test !JuliaInterpreter.shouldbreak(fr, fr.pc)
+end
+
+@testset "Function breakpoints tolerate non-Type signature parameters" begin
+    remove()
+    oc_bp = Base.Experimental.@opaque x -> x + 1
+    oc_bp_wrap(f, x) = f(x)
+    @interpret oc_bp_wrap(oc_bp, 1)  # caches a framecode whose method signature holds a bare Vararg
+    nontype_sig_f(x) = x
+    bp = breakpoint(nontype_sig_f)   # must not throw while scanning cached framecodes
+    @test bp isa JuliaInterpreter.BreakpointSignature
+    remove()
+end
+
+@testset "Replacement and remove-all fire remove hooks" begin
+    remove()
+    events = []
+    hook = (f, bp) -> push!(events, nameof(f))
+    JuliaInterpreter.on_breakpoints_updated(hook)
+    try
+        hookfire(x) = x
+        JuliaInterpreter.enter_call(hookfire, 1)
+        breakpoint(hookfire)
+        breakpoint(hookfire)    # replacement must fire a remove for the old handle
+        @test count(==(:remove), events) == 1
+        empty!(events)
+        remove()                # remove-all must fire remove hooks
+        @test count(==(:remove), events) == 1
+    finally
+        filter!(!=(hook), JuliaInterpreter.breakpoint_update_hooks)
+        remove()
+    end
+end
+
+@testset "@breakpoint conditions see the caller module's globals" begin
+    remove()
+    @eval module BreakpointCondModule
+    using JuliaInterpreter
+    const LIMIT = 0
+    f(x) = x
+    const bp = @breakpoint f(1) x > LIMIT
+    end
+    ret = @interpret BreakpointCondModule.f(1)
+    @test ret isa Tuple && ret[2] isa JuliaInterpreter.BreakpointRef
+    remove()
+end
+
+@testset "Breakpoints reach cached generated-function framecodes" begin
+    remove()
+    @generated genbp(x) = :(x + 1)
+    fr = JuliaInterpreter.enter_call(genbp, 1)  # warms genframedict
+    JuliaInterpreter.finish_and_return!(fr)
+    breakpoint(genbp)
+    ret = @interpret genbp(1)
+    @test ret isa Tuple && ret[2] isa JuliaInterpreter.BreakpointRef
+    remove()
+end
+
+@testset "Conditions tolerate unbound static parameters" begin
+    remove()
+    unbound_sparam(x::T) where {T,S} = x
+    breakpoint(unbound_sparam, :(1 == 1))
+    fr = JuliaInterpreter.enter_call(unbound_sparam, 1)
+    @test JuliaInterpreter.shouldbreak(fr, fr.pc)
+    remove()
+end
+
+@testset "A replaced breakpoint handle no longer controls the replacement" begin
+    remove()
+    replaced_bp_f(x) = x
+    fr = JuliaInterpreter.enter_call(replaced_bp_f, 1)
+    oldbp = breakpoint(replaced_bp_f)
+    newbp = breakpoint(replaced_bp_f)
+    disable(oldbp)
+    @test newbp.enabled[]
+    @test JuliaInterpreter.shouldbreak(fr, fr.pc)
+    remove()
+end
+
+@testset "File suffix matching respects path-component boundaries" begin
+    @test JuliaInterpreter.endswith_at_pathsep("/a/b/foo.jl", "foo.jl")
+    @test JuliaInterpreter.endswith_at_pathsep("/a/b/foo.jl", "b/foo.jl")
+    @test JuliaInterpreter.endswith_at_pathsep("foo.jl", "foo.jl")
+    @test !JuliaInterpreter.endswith_at_pathsep("/a/notfoo.jl", "foo.jl")
+    @test !JuliaInterpreter.endswith_at_pathsep("/a/xb/foo.jl", "b/foo.jl")
+    remove()
+    Base.include_string(@__MODULE__, "suffix_bp_f() = 1", "/tmp/not_target_file.jl")
+    JuliaInterpreter.enter_call(suffix_bp_f)  # cache the framecode
+    bp = breakpoint("target_file.jl", 1)
+    @test isempty(bp.instances)
+    remove()
 end

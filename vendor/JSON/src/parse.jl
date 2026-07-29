@@ -167,6 +167,8 @@ objecttype(::JSONReadStyle{OT}) where {OT} = OT
 nullvalue(::StructStyle) = nothing
 nullvalue(st::JSONReadStyle) = st.null
 
+StructUtils.initialize(::JSONReadStyle, ::Type{Object}, source) = DEFAULT_OBJECT_TYPE()
+
 # this allows struct fields to specify tags under the json key specifically to override JSON behavior
 StructUtils.fieldtagkey(::JSONStyle) = :json
 StructUtils.defaultstate(st::JSONReadStyle) = StructUtils.defaultstate(st.style)
@@ -175,6 +177,12 @@ StructUtils.defaultstate(st::JSONReadStyle) = StructUtils.defaultstate(st.style)
 StructUtils.dictlike(st::JSONReadStyle, ::Type{T}) where {T} = StructUtils.dictlike(st.style, T)
 StructUtils.arraylike(st::JSONReadStyle, ::Type{T}) where {T} = StructUtils.arraylike(st.style, T)
 StructUtils.nulllike(st::JSONReadStyle, ::Type{T}) where {T} = StructUtils.nulllike(st.style, T)
+# Keep structlike forwarding specific to custom JSONStyle wrappers so type-level StructStyle
+# specializations (for example @nonstruct types) continue to dispatch without ambiguity.
+StructUtils.structlike(st::JSONReadStyle{O,N,S}, ::Type{T}) where {O,N,S<:JSONStyle,T} =
+    StructUtils.structlike(st.style, T)
+StructUtils.structlike(st::JSONReadStyle{O,N,S}, ::Type{T}) where {O,N,S<:JSONStyle,T<:NamedTuple} =
+    StructUtils.structlike(st.style, T)
 
 function jsonreadstyle(::Type{T}, ::Type{O}, null, style::StructStyle, unknown_fields::Symbol) where {T,O}
     ignore_unknown_fields =
@@ -381,8 +389,30 @@ StructUtils.lift(st::JSONReadStyle, ::Type{T}, x::PtrString) where {T} =
 StructUtils.liftkey(::JSONReadStyle, ::Type{T}, x::AbstractString) where {T<:Integer} = Base.parse(T, x)
 StructUtils.liftkey(::JSONReadStyle, ::Type{T}, x::AbstractString) where {T<:AbstractFloat} = Base.parse(T, x)
 
-StructUtils.lift(style::JSONReadStyle, ::Type{T}, x, tags) where {T} = StructUtils.lift(style.style, T, x, tags)
-StructUtils.lift(style::JSONReadStyle, ::Type{T}, x) where {T} = StructUtils.lift(style.style, T, x)
+_isliftpair(x) = x isa Tuple && !(x isa NamedTuple) && length(x) == 2
+_liftresult(x, st) = _isliftpair(x) ? x : (x, StructUtils.defaultstate(st))
+_liftresult(x, pos::Int) = _isliftpair(x) ? x : (x, pos)
+
+struct _NoCustomLazyLift end
+const _NO_CUSTOM_LAZY_LIFT = _NoCustomLazyLift()
+
+StructUtils.lift(::JSONStyle, ::Type{T}, ::LazyValues, tags) where {T} = _NO_CUSTOM_LAZY_LIFT
+StructUtils.lift(::JSONStyle, ::Type{T}, ::LazyValues) where {T} = _NO_CUSTOM_LAZY_LIFT
+
+StructUtils.lift(style::JSONReadStyle, ::Type{T}, x, tags) where {T} =
+    _liftresult(StructUtils.lift(style.style, T, x, tags), style)
+StructUtils.lift(style::JSONReadStyle, ::Type{T}, x) where {T} =
+    _liftresult(StructUtils.lift(style.style, T, x), style)
+
+function customlazylift(style::JSONReadStyle, ::Type{T}, x::LazyValues, tags) where {T}
+    inner = style.style
+    inner isa JSONStyle || return nothing
+    ret = StructUtils.lift(inner, T, x, tags)
+    ret === _NO_CUSTOM_LAZY_LIFT || return _liftresult(ret, skip(x))
+    ret = StructUtils.lift(inner, T, x)
+    ret === _NO_CUSTOM_LAZY_LIFT || return _liftresult(ret, skip(x))
+    return nothing
+end
 
 function StructUtils.lift(style::JSONReadStyle, ::Type{T}, x::LazyValues) where {T<:AbstractArray{E,0}} where {E}
     m = T(undef)
@@ -393,6 +423,10 @@ end
 function StructUtils.lift(style::JSONReadStyle, ::Type{T}, x::LazyValues, tags=(;)) where {T}
     type = gettype(x)
     buf = getbuf(x)
+    if type == JSONTypes.OBJECT || type == JSONTypes.ARRAY
+        custom = customlazylift(style, T, x, tags)
+        custom === nothing || return custom
+    end
     if type == JSONTypes.STRING
         GC.@preserve buf begin
             ptrstr, pos = parsestring(x)
@@ -436,10 +470,10 @@ function StructUtils.lift(style::JSONReadStyle, ::Type{T}, x::LazyValues, tags=(
         val1 = out.value
         # big switch here for --trim verify-ability
         if val1 isa Object{String,Any}
-            val, _ = StructUtils.lift(style, T, val1)
+            val, _ = StructUtils.lift(style, T, val1, tags)
             return val, pos
         elseif val1 isa Vector{Any}
-            val, _ = StructUtils.lift(style, T, val1)
+            val, _ = StructUtils.lift(style, T, val1, tags)
             return val, pos
         elseif val1 isa String
             val, _ = StructUtils.lift(style, T, val1)

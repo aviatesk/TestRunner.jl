@@ -290,10 +290,10 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
             src = only(lwr.args)::CodeInfo
 
             concretized = falses(length(src.code))
-            select_statements!(interp, concretized, src, context, lines)
+            controller = select_statements!(interp, concretized, src, context, lines)
 
             frame = JI.Frame(interp.context, src)
-            LCU.selective_eval_fromstart!(interp, frame, concretized, #=istoplevel=#true)
+            LCU.selective_eval_fromstart!(interp, frame, concretized, controller, #=istoplevel=#true)
         else
             # Unconditionally execute non-test top-level code,
             # or no patterns are specified for this file.
@@ -421,12 +421,12 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
         end
     end
 
-    select_dependencies!(concretized, src, edges, cl)
+    controller = select_dependencies!(concretized, src, edges, cl)
 
     # Debug: uncomment to see which statements are selected
     # LCU.print_with_code(stdout, src, concretized)
 
-    nothing
+    return controller
 end
 
 function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
@@ -445,7 +445,11 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
         changed |= LCU.add_control_flow!(concretized, src, cfg, postdomtree)
     end
 
-    LCU.add_active_gotos!(concretized, src, cfg, postdomtree)
+    controller = LCU.SelectiveEvalController()
+    LCU.add_active_gotos!(concretized, src, cfg, postdomtree, controller)
+    LCU.record_termination_points!(controller, concretized, cfg)
+
+    return controller
 end
 
 # Add statements that use SSA values produced by already selected statements
@@ -534,8 +538,7 @@ function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, call_expr::Ex
     pc = frame.pc
     ret = JI.bypass_builtins(interp, frame, call_expr, pc)
     isa(ret, Some{Any}) && return ret.value
-    # NOTE `JI.maybe_evaluate_builtin` may call `Core._apply_iterate`, which may result in world age error otherwise
-    ret = @invokelatest JI.maybe_evaluate_builtin(interp, frame, call_expr, false)
+    ret = JI.maybe_evaluate_builtin(interp, frame, call_expr, false)
     isa(ret, Some{Any}) && return ret.value
     fargs = JI.collect_args(interp, frame, call_expr)
     return JI.evaluate_call!(interp, frame, fargs, enter_generated)
