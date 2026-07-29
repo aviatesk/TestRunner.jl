@@ -26,4 +26,6 @@ UUIDs = "1.6"
 test = ["Aqua", "Serialization", "Test"]
 
 [sources.PrecompileTools]
-path = "../PrecompileTools"
+subdir = "vendor/PrecompileTools"
+rev = "92630b4150f47d0ab4719bbb53dda17225d7de07"
+url = "https://github.com/aviatesk/TestRunner.jl"
