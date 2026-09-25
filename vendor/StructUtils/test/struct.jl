@@ -231,6 +231,72 @@ end
     data::String
 end
 
+@nonstruct struct NonStructMapping
+    value::Any
+end
+
+StructUtils.lift(::Type{NonStructMapping}, value) = NonStructMapping(value)
+StructUtils.lower(value::NonStructMapping) = value.value
+
+struct NonStructMappingHolder
+    value::NonStructMapping
+end
+
+struct NonStructMappingTarget
+    leaf::Int
+end
+
+abstract type AbstractNonStructMappingTarget end
+
+struct ConcreteNonStructMappingTarget <: AbstractNonStructMappingTarget
+    leaf::Int
+end
+
+StructUtils.@choosetype AbstractNonStructMappingTarget source -> begin
+    source isa NonStructMapping || error("expected the raw non-struct source")
+    ConcreteNonStructMappingTarget
+end
+
+mutable struct NonStructMappingStyle <: StructUtils.StructStyle
+    lower_calls::Int
+end
+
+function StructUtils.lower(style::NonStructMappingStyle, value::NonStructMapping)
+    style.lower_calls += 1
+    return value.value
+end
+
+struct NonStructCustomMakeTarget
+    saw_raw_source::Bool
+end
+
+function StructUtils.make(
+    style::NonStructMappingStyle,
+    ::Type{NonStructCustomMakeTarget},
+    source::NonStructMapping,
+)
+    return NonStructCustomMakeTarget(true), StructUtils.defaultstate(style)
+end
+
+struct RecursiveLowerStyle <: StructUtils.StructStyle end
+
+struct RecursiveLowerLeaf
+    value::Int
+end
+
+struct RecursiveLowerRoot
+    leaf::RecursiveLowerLeaf
+    label::String
+end
+
+function StructUtils.lower(
+    style::RecursiveLowerStyle,
+    value::Union{RecursiveLowerLeaf,RecursiveLowerRoot},
+)
+    result, _ = StructUtils.make(style, Dict{String,Any}, value)
+    return result
+end
+
 struct Q
     id::Int
     value::MIME
@@ -266,3 +332,49 @@ end
 struct FrankenTuple
     params::Tuple{Union{Float64, Nothing}, Union{Vector{Float64}, Float64}, Union{Vector{Float64}, Float64, Nothing}}
 end
+
+# Shaped like FixedPointDecimals.FixedDecimal: a `Number` backed by a single integer
+# field, where the field layout is an implementation detail and the value itself is a
+# scalar. Such a type must be made by lifting a scalar source, not by reading `{"i": n}`.
+struct Centi <: Real
+    i::Int
+end
+Base.convert(::Type{Centi}, x::AbstractFloat) = Centi(round(Int, 100x))
+Base.convert(::Type{Centi}, x::Integer) = Centi(100 * Int(x))
+Base.:(==)(a::Centi, b::Centi) = a.i == b.i
+
+struct CentiHolder
+    x::Centi
+end
+Base.:(==)(a::CentiHolder, b::CentiHolder) = a.x == b.x
+
+# Absent keys for fields whose type admits `missing` or `nothing`.
+struct AbsentMissing
+    a::Int
+    b::Union{Missing,String}
+end
+struct AbsentNothing
+    a::Int
+    b::Union{Nothing,String}
+end
+
+# A style-first `applyeach` overload, as a package defines for its own types.
+struct PinStyle <: StructUtils.StructStyle end
+struct Pinned
+    x::Int
+end
+StructUtils.applyeach(::PinStyle, f, p::Pinned) = f("x", p.x)
+
+# Lowers every key, so an array index would become a string if it were lowered.
+struct StringKeyStyle <: StructUtils.StructStyle end
+StructUtils.lowerkey(::StringKeyStyle, x) = string(x)
+
+# A field wider than inference splits (four members) and a same-shaped array element type.
+struct WideUnion
+    v::Union{Nothing,Int,String,Float64,Bool}
+end
+
+struct CallableCollector
+    values::Vector{Any}
+end
+(c::CallableCollector)(k, v) = (push!(c.values, k => v); nothing)

@@ -41,6 +41,10 @@ const current_interpreter = Ref{TRInterpreter}()
 
 const errors_and_fails = Dict{Union{Test.Error,Test.Fail},Vector{Any}}()
 
+# Keeps the results of the outermost `TestRunnerTestSet` available even when finishing it
+# throws `Test.TestSetException`
+const last_toplevel_testset = Ref{Union{Nothing,Test.DefaultTestSet}}(nothing)
+
 include("TestRunnerTestSet.jl")
 
 """
@@ -102,8 +106,9 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 # Notes
 - All top-level code (except @test and @testset) is automatically executed
 - Only top-level code is interpreted; function calls within tests are compiled for performance
-- When a pattern matches within a testset, currently all tests in that testset are executed
-  due to limitations in source provenance tracking
+- Matched code runs within its enclosing testsets without running their other tests, except
+  that matching the first statement of a testset body currently executes all tests in that
+  testset due to limitations in source provenance tracking
 - If an empty patterns collection is provided, only non-test top-level code will be executed
   (no `@test` or `@testset` expressions will run). This includes all function definitions,
   imports, and other setup code, including any `include` statements
@@ -410,16 +415,17 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
     cl = LCU.CodeLinks(mod, src)
     edges = LCU.CodeEdges(src, cl)
 
+    line_stacks = Vector{Vector{Int}}(undef, length(src.code))
     for idx in 1:length(src.code)
+        lins = Base.IRShow.buildLineInfoNode(src.debuginfo, nothing, idx)
+        line_stacks[idx] = Int[lin.line for lin in lins if String(lin.file) == interp.filename]
         # If the line containing this statement is requested by pattern match,
         # this statement needs to be executed.
-        lins = Base.IRShow.buildLineInfoNode(src.debuginfo, nothing, idx)
-        for lin in lins
-            if String(lin.file) == interp.filename && lin.line in lines
-                concretized[idx] = true
-            end
+        if any(in(lines), line_stacks[idx])
+            concretized[idx] = true
         end
     end
+    select_enclosing_macro_code!(concretized, line_stacks)
 
     controller = select_dependencies!(concretized, src, edges, cl)
 
@@ -427,6 +433,28 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
     # LCU.print_with_code(stdout, src, concretized)
 
     return controller
+end
+
+# The code expanded from an enclosing macro call, e.g. the setup and teardown of an enclosing
+# `@testset`, is attributed to a proper prefix of the line stack of the code nested in it,
+# while the other code in the macro call (e.g. the other tests of that `@testset`) is
+# attributed to longer stacks. Select the former so that the selected code runs within its
+# enclosing context, e.g. so that selected tests are recorded into their enclosing testsets.
+function select_enclosing_macro_code!(concretized::BitVector, line_stacks::Vector{Vector{Int}})
+    prefixes = Set{Vector{Int}}()
+    for idx in 1:length(concretized)
+        concretized[idx] || continue
+        line_stack = line_stacks[idx]
+        for n in 1:length(line_stack)-1
+            push!(prefixes, line_stack[1:n])
+        end
+    end
+    for idx in 1:length(concretized)
+        if !concretized[idx] && line_stacks[idx] in prefixes
+            concretized[idx] = true
+        end
+    end
+    return concretized
 end
 
 function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
@@ -548,11 +576,35 @@ end
 # `JI.evaluate_call!(::JI.NonRecursiveInterpreter, ...)`
 # but includes a few important adjustments specific to TestRunner's virtual process:
 # - Special handling for `include` calls: recursively apply the virtual process to included files.
-function JI.evaluate_call!(interp::TRInterpreter, ::JI.Frame, fargs::Vector{Any}, ::Bool)
+# - `rethrow` is left to JuliaInterpreter: exceptions caught by interpreted handlers do
+#   not live on the task's native exception stack, so it needs to re-raise the one being
+#   handled by the interpreted frames.
+function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, fargs::Vector{Any},
+                           enter_generated::Bool)
+    if fargs[1] === Base.rethrow
+        return @invoke JI.evaluate_call!(interp::JI.Interpreter, frame::JI.Frame,
+                                         fargs::Vector{Any}, enter_generated::Bool)
+    end
     f = popfirst!(fargs)
     args = fargs # now it's really args
-    isinclude(f) && return handle_include(interp, f, args)
-    return @invokelatest f(args...)
+    isinclude(f) && return invokelatest_in_scope(frame, handle_include, interp, f, args)
+    return invokelatest_in_scope(frame, f, args...)
+end
+
+# JuliaInterpreter tracks the dynamic scopes entered by interpreted code (e.g. the testset
+# scope entered by `@testset`) in `frame.framedata.current_scopes` instead of installing them
+# on the task, so calls into compiled code need to run within those scopes explicitly, as
+# `JI.maybe_eval_with_scope` does for `JI.NonRecursiveInterpreter`.
+function invokelatest_in_scope(frame::JI.Frame, @nospecialize(f), @nospecialize(args...))
+    scopes = frame.framedata.current_scopes
+    isempty(scopes) && return @invokelatest f(args...)
+    pairs = eltype(Base.ScopedValues.ScopeStorage)[]
+    for scope in scopes
+        append!(pairs, scope.values)
+    end
+    return Base.ScopedValues.with(pairs...) do
+        @invokelatest f(args...)
+    end
 end
 
 isinclude(@nospecialize f) = f isa Base.IncludeInto || (isa(f, Function) && nameof(f) === :include)
@@ -592,10 +644,13 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
 end
 
 function JI.handle_err(interp::TRInterpreter, frame::JI.Frame, @nospecialize(err))
-    excs = map(current_exceptions()) do exc
-        ExceptionFrame((exc.exception, exc.backtrace))
-    end
-    append!(interp.current_exceptions, scrub_exc_stack(excs))
+    if isempty(interp.current_exceptions) ||
+       interp.current_exceptions[end].exception !== err
+        excs = map(current_exceptions()) do exc
+            ExceptionFrame((exc.exception, exc.backtrace))
+        end
+        append!(interp.current_exceptions, scrub_exc_stack(excs))
+    end # otherwise `err` is being re-raised by `rethrow` and has already been recorded
     return @invoke JI.handle_err(interp::JI.Interpreter, frame::JI.Frame, err::Any)
 end
 
@@ -610,14 +665,19 @@ function scrub_backtrace(bt::Vector{BacktraceElm})
                 Test.ip_has_file_and_func(ip, @__FILE__, (:runtest, :runtests)), bt)
         end return bt
     internal_idx = @something let
-            findfirst(ip::BacktraceElm ->
-                Test.ip_has_file_and_func(ip, @__FILE__, (:evaluate_call!,)), bt)
+            findfirst(ip::BacktraceElm -> ip_has_file(ip, @__FILE__), bt)
         end let
             findfirst(ip::BacktraceElm ->
                 Test.ip_has_file_and_func(ip, JULIAINTERPRETER_INTERPRET_FILE, (:step_expr!,:eval_rhs,)), bt)
         end return bt
     internal_idx < runtest_idx || return bt
     return append!(bt[1:internal_idx-1], bt[runtest_idx:end])
+end
+
+function ip_has_file(ip::BacktraceElm, file::String)
+    return any(Base.StackTraces.lookup(ip)) do fr::Base.StackTraces.StackFrame
+        string(fr.file) == file
+    end
 end
 
 function scrub_exc_stack(excs::Vector{ExceptionFrame})

@@ -215,6 +215,64 @@ nt = StructUtils.make(NamedTuple, user)
 user = JSON.parse(json_string, User)  # Uses StructUtils.make under the hood
 ```
 
+### Parametric Types
+
+Use a concrete target when its type parameters are known:
+
+```julia
+struct Box{T}
+    value::T
+end
+
+box = StructUtils.make(Box{Int}, Dict("value" => 1))
+```
+
+An unparameterized target also works when its constructor can infer every type
+parameter from the converted field values:
+
+```julia
+inferred = StructUtils.make(Box, Dict("value" => 1))
+@assert inferred isa Box{Int}
+```
+
+Use a concrete target or a `choosetype` tag when constructor inference cannot
+determine every parameter.
+
+### Lazily Initialized Fields
+
+When
+[`LazilyInitializedFields.jl`](https://github.com/KristofferC/LazilyInitializedFields.jl)
+is loaded, its lazy fields can be omitted from a source. StructUtils initializes
+each omitted lazy field with `uninit`. Present values are converted to the
+field's logical type, including nested structs and parametric types.
+
+```julia
+using LazilyInitializedFields
+
+struct Entry{T}
+    value::T
+end
+
+@lazy struct Cache{T}
+    id::T
+    @lazy entry::Entry{T}
+end
+
+empty_cache = StructUtils.make(Cache{Int}, Dict("id" => 1))
+@assert !isinit(empty_cache, :entry)
+
+loaded_cache = StructUtils.make(
+    Cache,
+    Dict("id" => 1, "entry" => Dict("value" => 2)),
+)
+@assert loaded_cache isa Cache{Int}
+@assert loaded_cache.entry == Entry{Int}(2)
+```
+
+An explicit StructUtils field default takes precedence over `uninit`.
+Outbound conversion still treats `uninit` as a defined field value and includes
+it in the destination.
+
 ### How `make` Works
 
 The `make` function follows these steps:
@@ -226,17 +284,29 @@ The `make` function follows these steps:
    - Regular struct (default constructor)
    - Primitive type (requiring a `lift` function)
 
-2. **Object Construction**:
+2. **Root Source Conversion**:
+   - Call `lower` once when the root source is not struct-like
+   - Traverse a struct-like root directly
+
+3. **Object Construction**:
    - For dictionary-like types: Create an empty dictionary and add key-value pairs
    - For array-like types: Create an empty array and push values
    - For no-arg types: Create an empty instance and set fields
    - For regular structs: Collect field values and call the constructor
    - For primitive types: Use `lift` to convert the source value
 
-3. **Field Mapping**:
+4. **Field Mapping**:
    - Match source keys to target fields, respecting field tags
    - Convert values to appropriate field types
    - Handle missing values, defaults, and special types
+
+`applyeach` calls `lower` on nested values in both cases. A `lower` method for
+a struct-like type may therefore call `make` to reuse its field traversal:
+
+```julia
+StructUtils.lower(style::MyStyle, x::MyStruct) =
+    StructUtils.make(Dict{String,Any}, x, style)
+```
 
 ## Implementing StructUtils Interfaces
 
@@ -526,4 +596,3 @@ StructUtils.jl provides a comprehensive suite of tools for working with Julia st
    - Field metadata (`fielddefaults`, `fieldtags`, etc.)
 
 StructUtils.jl integrates well with other packages like JSON.jl for seamless serialization and deserialization of complex Julia types.
-

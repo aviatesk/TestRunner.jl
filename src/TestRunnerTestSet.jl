@@ -35,9 +35,10 @@ function Test.finish(trts::TestRunnerTestSet)
         # Attach this test set to the parent test set (unless this is TestRunnerMetaTestSet)
         parent_ts = Test.get_testset()
         if !(parent_ts isa TestRunnerMetaTestSet)
-            Test.record(parent_ts, trts.dts)
+            Test.finish(trts.dts) # records the end time as well as attaches it to `parent_ts`
         end
     else
+        last_toplevel_testset[] = trts.dts
         Test.finish(trts.dts)
     end
     return trts.dts

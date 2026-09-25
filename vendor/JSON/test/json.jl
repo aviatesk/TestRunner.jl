@@ -42,6 +42,11 @@ end
 
 @enum JsonFruit Apple Orange
 
+struct ClosedStyle <: JSON.JSONStyle end
+struct FloatRationalStyle <: JSON.JSONStyle end
+JSON.lower(::FloatRationalStyle, x::Rational) = float(x)
+JSON.applyany(::ClosedStyle, f, k, v) = throw(ArgumentError("closed"))
+
 @testset "JSON.json" begin
 
 @testset "Basics" begin
@@ -304,8 +309,13 @@ end
         @test JSON.json(x; omit_null=false) == "{\"id\":1,\"forced\":null,\"passthrough\":null}"
     end
     # custom style overload
-    JSON.lower(::CustomJSONStyle, x::Rational) = (num=x.num, den=x.den)
-    @test JSON.json(1//3; style=CustomJSONStyle()) == "{\"num\":1,\"den\":3}"
+    # Rational lowers to its num/den pair by default, so it round-trips exactly
+    @test JSON.json(1//3) == "{\"num\":1,\"den\":3}"
+    @test JSON.json(3//4) == "{\"num\":3,\"den\":4}"
+    @test JSON.json(-1//3) == "{\"num\":-1,\"den\":3}"
+    # ...and a custom style can still override that back to a float
+    JSON.lower(::CustomJSONStyle, x::Rational) = float(x)
+    @test JSON.json(1//3; style=CustomJSONStyle()) == "0.3333333333333333"
     # @omit_null and @omit_empty
     @test JSON.json(OmitNull(1, nothing)) == "{\"id\":1}"
     @test JSON.json(OmitNull(1, nothing); omit_null=false) == "{\"id\":1,\"name\":null}"
@@ -774,6 +784,30 @@ end
     result = String(take!(io))
     parsed_keys = [m.match for m in eachmatch(r"\"([a-z])\"", result)]
     @test parsed_keys == sort(parsed_keys)
+end
+
+@testset "jsonlines keeps the custom style for nested values" begin
+    @test JSON.json([Dict("a" => 1//4)]; style=FloatRationalStyle()) == "[{\"a\":0.25}]"
+    @test JSON.json([Dict("a" => 1//4)]; style=FloatRationalStyle(), jsonlines=true) == "{\"a\":0.25}\n"
+end
+
+@testset "Any-valued containers write each parse type directly; others take applyany" begin
+    v = Any[1, 1.5, "s", true, nothing, missing, Any[1], JSON.Object{String,Any}("a" => 1), Dict{String,Any}("b" => 2), BigInt(1), BigFloat(1)]
+    @test JSON.json(v) == "[1,1.5,\"s\",true,null,null,[1],{\"a\":1},{\"b\":2},1,1.0]"
+    @test JSON.json(Dict{String,Any}("a" => Any[missing])) == "{\"a\":[null]}"
+    @test JSON.json(Pair{String,Any}["a" => 1, "b" => nothing]) == "{\"a\":1,\"b\":null}"
+    s = "{\"i\":1,\"a\":[1.5,\"x\",null,{\"b\":[true]}]}"
+    @test JSON.json(JSON.parse(s)) == s
+    # any other element type lowers through `applyany`, which a style can close off
+    @test JSON.json(Any[Int8(1), (a=1,)]) == "[1,{\"a\":1}]"
+    @test JSON.json(Dict{String,Any}("z" => Int8(1), "a" => (b=1,)); sort_keys=true) == "{\"a\":{\"b\":1},\"z\":1}"
+    # the parse produces `Int64` on every platform, so the literal is written as one (`Int32` on x86 would take `applyany`)
+    @test JSON.json(Any[Int64(1), "x"]; style=ClosedStyle()) == "[1,\"x\"]"
+    @test_throws ArgumentError JSON.json(Any[Int8(1)]; style=ClosedStyle())
+    @test_throws ArgumentError JSON.json(Dict{String,Any}("z" => Int8(1)); style=ClosedStyle(), sort_keys=true)
+    # outputs far past the initial size guess grow the buffer correctly
+    strs = fill("y"^1000, 5000)
+    @test JSON.json(strs) == "[" * join(("\"" * x * "\"" for x in strs), ",") * "]"
 end
 
 end # @testset "JSON.json"

@@ -2,10 +2,11 @@ module TestRunnerApp
 
 # Import necessary modules
 using Test: Test
-using ..TestRunner: TestRunnerTestSet, errors_and_fails, runtest
+using ..TestRunner: JS, TestRunnerTestSet, errors_and_fails, last_toplevel_testset, runtest
 using JSON: JSON
 
 include("testrunner-types.jl")
+include("testset-results.jl")
 
 # to support precompilation
 const app_runner_module = Ref{Union{Module,Nothing}}(nothing)
@@ -352,40 +353,37 @@ function extract_test_stats_from_exception(ex::Test.TestSetException, duration::
 end
 
 function extract_diagnostics_from_exception(ex::Test.TestSetException)
-    diagnostics = TestRunnerDiagnostic[]
+    return TestRunnerDiagnostic[testrunner_diagnostic(result) for result in ex.errors_and_fails]
+end
 
-    for result in ex.errors_and_fails
-        source = result.source
-        filename = string(source.file)
-        line = source.line
-        relatedInformation = nothing
-        if haskey(errors_and_fails, result)
-            excs = errors_and_fails[result]
-            if !isempty(excs)
-                exc = first(excs)
-                if hasproperty(exc, :backtrace)
-                    st = stacktrace(exc.backtrace)
-                    relatedInformation = TestRunnerDiagnosticRelatedInformation[]
-                    for sf in st
-                        linfo = sf.linfo
-                        if linfo isa Core.CodeInstance
-                            linfo = linfo.def
-                        end
-                        local message = linfo isa Core.MethodInstance ?
-                            sprint(Base.show_tuple_as_call, Symbol(""), linfo.specTypes) :
-                            string(sf.func)
-                        push!(relatedInformation, TestRunnerDiagnosticRelatedInformation(
-                            string(sf.file), sf.line, message))
+function testrunner_diagnostic(result::Union{Test.Fail,Test.Error})
+    source = result.source
+    filename = string(source.file)
+    line = source.line
+    relatedInformation = nothing
+    if haskey(errors_and_fails, result)
+        excs = errors_and_fails[result]
+        if !isempty(excs)
+            exc = first(excs)
+            if hasproperty(exc, :backtrace)
+                st = stacktrace(exc.backtrace)
+                relatedInformation = TestRunnerDiagnosticRelatedInformation[]
+                for sf in st
+                    linfo = sf.linfo
+                    if linfo isa Core.CodeInstance
+                        linfo = linfo.def
                     end
+                    local message = linfo isa Core.MethodInstance ?
+                        sprint(Base.show_tuple_as_call, Symbol(""), linfo.specTypes) :
+                        string(sf.func)
+                    push!(relatedInformation, TestRunnerDiagnosticRelatedInformation(
+                        string(sf.file), sf.line, message))
                 end
             end
         end
-        message = sprint(show, result)
-        diagnostic = TestRunnerDiagnostic(filename, line, message, relatedInformation)
-        push!(diagnostics, diagnostic)
     end
-
-    return diagnostics
+    message = sprint(show, result)
+    return TestRunnerDiagnostic(filename, line, message, relatedInformation)
 end
 
 function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines, verbose::Bool, project,
@@ -497,16 +495,11 @@ function runtest_json(
 
     local stats::TestRunnerStats = TestRunnerStats()
     local diagnostics::Vector{TestRunnerDiagnostic} = TestRunnerDiagnostic[]
+    last_toplevel_testset[] = nothing
     start_time = time()
     try
         result = runtest_internal(filename, patterns, filter_lines, verbose, project, source, root_path)
-        counts = Test.get_test_counts(result)
-        n_passed = counts.passes + counts.cumulative_passes
-        n_failed = counts.fails + counts.cumulative_fails
-        n_errored = counts.errors + counts.cumulative_errors
-        n_broken = counts.broken + counts.cumulative_broken
-        duration = result.time_end - result.time_start
-        stats = TestRunnerStats(; n_passed, n_failed, n_errored, n_broken, duration)
+        stats = testset_stats(result)
         return 0
     catch e # Any test failures/errors cause TestSetException to be thrown
         e isa Test.TestSetException || rethrow(e)
@@ -520,12 +513,14 @@ function runtest_json(
         logs = read(rd, String)
         close(rd)
         patterns = isempty(patterns) ? nothing : patterns
+        testsets = testset_results(filename, source)
         result = TestRunnerResult(;
             filename,
             patterns,
             stats,
             logs,
-            diagnostics)
+            diagnostics,
+            testsets)
         JSON.json(stdout, result)
     end
 end
