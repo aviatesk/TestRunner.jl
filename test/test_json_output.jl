@@ -38,7 +38,7 @@ function with_failing_test_file(tester)
 end
 
 function run_testrunner_process(args; stdin_input::Union{Nothing,AbstractString}=nothing)
-    project = dirname(dirname(@__DIR__))  # Get TestRunner project directory
+    project = pkgdir(TestRunner)
     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$project -e "using TestRunner; exit(TestRunner.main(ARGS))" -- $args`
 
     mktemp() do out_path, _
