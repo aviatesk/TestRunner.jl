@@ -324,32 +324,41 @@ Run individual `@test` cases that use the `process` function:
 julia> @testset "Standalone runner" verbose=true runtest("demo.jl", [:(@test process(s_) == n_)]);
 Test Summary:     | Pass  Total  Time
 Standalone runner |    2      2  0.0s
+  struct tests    |    1      1  0.0s
 ```
 
 Nested `@testset` can be selected:
 ```julia-repl
 julia> @testset "Nested runner" verbose=true runtest("demo.jl", ["inner tests 1"]);
-Test Summary:   | Pass  Total  Time
-Nested runner   |    2      2  0.0s
-  inner tests 1 |    2      2  0.0s
+Test Summary:  | Pass  Total  Time
+Nested runner  |    2      2  0.0s
+  nested tests |    2      2  0.0s
 ```
+
+Selected tests run within their enclosing `@testset`s, so their results are
+recorded in the same test set hierarchy as when the whole file is run.
+Other tests of the enclosing `@testset`s (e.g. the other tests of
+`@testset "nested tests"` above) are not run.
 
 Individual `@test` cases can be selectively matched using pattern expressions:
 ```julia-repl
 julia> @testset "Pattern in nested" verbose=true runtest("demo.jl", [:(@test startswith(s_, prefix_))]);
 Test Summary:     | Pass  Total  Time
 Pattern in nested |    1      1  0.0s
+  nested tests    |    1      1  0.0s
 ```
 
 We can run tests by directly specifying line numbers:
 ```julia-repl
 julia> @testset "Single line" verbose=true runtest("demo.jl", [56]); # Run only the test on line 56
-Test Summary: | Pass  Total  Time
-Single line   |    1      1  0.0s
+Test Summary:      | Pass  Total  Time
+Single line        |    1      1  0.0s
+  calculator tests |    1      1  0.0s
 
 julia> @testset "Line range" verbose=true runtest("demo.jl", [55:57]); # Run tests in lines 55-57
-Test Summary: | Pass  Total  Time
-Line range    |    3      3  0.0s
+Test Summary:      | Pass  Total  Time
+Line range         |    3      3  0.0s
+  calculator tests |    3      3  0.0s
 
 julia> @testset "Mixed patterns" verbose=true runtest("demo.jl", ["calculator tests", 61]); # Combine named testsets with line numbers
 Test Summary:       | Pass  Total  Time
@@ -514,6 +523,7 @@ unrelated tests while still ensuring all code dependencies are available.
    julia> @testset "Limitation1 runner" verbose=true runtest("limitations/limitation1.jl", [:(@test isnothing(limitation1()))]);
    Test Summary:      | Pass  Total  Time
    Limitation1 runner |    2      2  0.0s
+     limitation1      |    2      2  0.0s
    ```
 
    Both tests are executed (2 tests pass) because they are on the same line. The
@@ -535,6 +545,7 @@ unrelated tests while still ensuring all code dependencies are available.
    julia> @testset "Workaround1 runner" verbose=true runtest("limitations/workaround1.jl", [:(@test isnothing(workaround1()))]);
    Test Summary:      | Pass  Total  Time
    Workaround1 runner |    1      1  0.0s
+     workaround1      |    1      1  0.0s
    ```
 
    Now only the matched test is executed (1 test passes).
