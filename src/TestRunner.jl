@@ -572,7 +572,15 @@ end
 # `JI.evaluate_call!(::JI.NonRecursiveInterpreter, ...)`
 # but includes a few important adjustments specific to TestRunner's virtual process:
 # - Special handling for `include` calls: recursively apply the virtual process to included files.
-function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, fargs::Vector{Any}, ::Bool)
+# - `rethrow` is left to JuliaInterpreter: exceptions caught by interpreted handlers do
+#   not live on the task's native exception stack, so it needs to re-raise the one being
+#   handled by the interpreted frames.
+function JI.evaluate_call!(interp::TRInterpreter, frame::JI.Frame, fargs::Vector{Any},
+                           enter_generated::Bool)
+    if fargs[1] === Base.rethrow
+        return @invoke JI.evaluate_call!(interp::JI.Interpreter, frame::JI.Frame,
+                                         fargs::Vector{Any}, enter_generated::Bool)
+    end
     f = popfirst!(fargs)
     args = fargs # now it's really args
     isinclude(f) && return invokelatest_in_scope(frame, handle_include, interp, f, args)
@@ -632,10 +640,13 @@ function handle_include(interp::TRInterpreter, @nospecialize(include_func), args
 end
 
 function JI.handle_err(interp::TRInterpreter, frame::JI.Frame, @nospecialize(err))
-    excs = map(current_exceptions()) do exc
-        ExceptionFrame((exc.exception, exc.backtrace))
-    end
-    append!(interp.current_exceptions, scrub_exc_stack(excs))
+    if isempty(interp.current_exceptions) ||
+       interp.current_exceptions[end].exception !== err
+        excs = map(current_exceptions()) do exc
+            ExceptionFrame((exc.exception, exc.backtrace))
+        end
+        append!(interp.current_exceptions, scrub_exc_stack(excs))
+    end # otherwise `err` is being re-raised by `rethrow` and has already been recorded
     return @invoke JI.handle_err(interp::JI.Interpreter, frame::JI.Frame, err::Any)
 end
 
@@ -650,14 +661,19 @@ function scrub_backtrace(bt::Vector{BacktraceElm})
                 Test.ip_has_file_and_func(ip, @__FILE__, (:runtest, :runtests)), bt)
         end return bt
     internal_idx = @something let
-            findfirst(ip::BacktraceElm ->
-                Test.ip_has_file_and_func(ip, @__FILE__, (:evaluate_call!,)), bt)
+            findfirst(ip::BacktraceElm -> ip_has_file(ip, @__FILE__), bt)
         end let
             findfirst(ip::BacktraceElm ->
                 Test.ip_has_file_and_func(ip, JULIAINTERPRETER_INTERPRET_FILE, (:step_expr!,:eval_rhs,)), bt)
         end return bt
     internal_idx < runtest_idx || return bt
     return append!(bt[1:internal_idx-1], bt[runtest_idx:end])
+end
+
+function ip_has_file(ip::BacktraceElm, file::String)
+    return any(Base.StackTraces.lookup(ip)) do fr::Base.StackTraces.StackFrame
+        string(fr.file) == file
+    end
 end
 
 function scrub_exc_stack(excs::Vector{ExceptionFrame})
