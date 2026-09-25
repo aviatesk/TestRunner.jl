@@ -38,7 +38,7 @@ function with_failing_test_file(tester)
 end
 
 function run_testrunner_process(args; stdin_input::Union{Nothing,AbstractString}=nothing)
-    project = dirname(dirname(@__DIR__))  # Get TestRunner project directory
+    project = pkgdir(TestRunner)
     cmd = `$(Base.julia_cmd()) --startup-file=no --project=$project -e "using TestRunner; exit(TestRunner.main(ARGS))" -- $args`
 
     mktemp() do out_path, _
@@ -120,6 +120,130 @@ with_failing_test_file() do testfile
     @test stats.n_passed == stats.n_errored == stats.n_broken == 0
     @test stats.duration > 0
     @test !isempty(json_result.diagnostics)
+end
+
+function with_test_file(tester, content::AbstractString)
+    mktemp() do path, io
+        write(io, content)
+        close(io)
+        tester(path)
+    end
+end
+
+@testset "testsets" begin
+    content = """
+    using Test
+
+    @testset "outer" begin
+        @test true
+        @testset "inner" begin
+            @test 1 == 2
+        end
+        @testset "case \$i" for i in 1:2
+            @test i > 0
+        end
+    end
+
+    @testset "other" begin
+        @test true
+    end
+    """
+    with_test_file(content) do testfile
+        result = run_testrunner_process(["--json", testfile, "outer"])
+        @test result.exitcode == 1
+        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        outer = only(json_result.testsets)
+        @test outer.description == "outer"
+        @test outer.line == 3
+        @test outer.stats.n_passed == 3
+        @test outer.stats.n_failed == 1
+        @test outer.stats.duration > 0
+        @test isempty(outer.diagnostics)
+        inner, case1, case2 = outer.children
+        @test inner.description == "inner"
+        @test inner.line == 5
+        @test inner.stats.n_failed == 1
+        @test only(inner.diagnostics).line == 6
+        @test case1.description == "case 1" && case1.line == 8
+        @test case2.description == "case 2" && case2.line == 8
+        @test case1.stats.n_passed == case2.stats.n_passed == 1
+    end
+    # Running a nested test set also reports its enclosing test sets
+    with_test_file(content) do testfile
+        result = run_testrunner_process(["--json", testfile, "inner"])
+        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        outer = only(json_result.testsets)
+        @test outer.line == 3
+        inner = only(outer.children)
+        @test inner.line == 5
+        @test inner.stats.n_failed == 1
+    end
+    # Without patterns, the file is run via `include` and test sets are not reported
+    with_test_file(content) do testfile
+        result = run_testrunner_process(["--json", testfile])
+        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        @test json_result.stats.n_passed == 4
+        @test json_result.testsets === nothing
+    end
+    # Custom test set types wrapping `Test.DefaultTestSet`
+    let content = """
+        using Test
+
+        struct WrapperTestSet <: Test.AbstractTestSet
+            dts::Test.DefaultTestSet
+        end
+        WrapperTestSet(desc::AbstractString; kws...) =
+            WrapperTestSet(Test.DefaultTestSet(desc; kws...))
+        Test.record(ts::WrapperTestSet, res) = Test.record(ts.dts, res)
+        Test.finish(ts::WrapperTestSet) = Test.finish(ts.dts)
+
+        @testset WrapperTestSet "wrapped" begin
+            @testset "nested" begin
+                @test true
+            end
+        end
+        """
+        with_test_file(content) do testfile
+            result = run_testrunner_process(["--json", testfile, "nested"])
+            @test result.exitcode == 0
+            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            wrapped = only(json_result.testsets)
+            @test wrapped.description == "wrapped"
+            @test wrapped.line == 11
+            nested = only(wrapped.children)
+            @test nested.description == "nested"
+            @test nested.line == 12
+            @test nested.stats.n_passed == 1
+        end
+    end
+    # A literal description is not matched by the pattern of a preceding interpolated one
+    let content = """
+        using Test
+
+        @testset "case \$i" for i in 1:2
+            @test true
+        end
+        @testset "case X" begin
+            @test true
+        end
+        """
+        with_test_file(content) do testfile
+            result = run_testrunner_process(["--json", testfile, "L3:8"])
+            @test result.exitcode == 0
+            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            case1, case2, casex = json_result.testsets
+            @test case1.description == "case 1" && case1.line == 3
+            @test case2.description == "case 2" && case2.line == 3
+            @test casex.description == "case X" && casex.line == 6
+        end
+        with_test_file(content) do testfile
+            result = run_testrunner_process(["--json", testfile, "case X"])
+            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            casex = only(json_result.testsets)
+            @test casex.description == "case X"
+            @test casex.line == 6
+        end
+    end
 end
 
 @testset "--read-stdin" begin

@@ -3,6 +3,11 @@ module test_error_handling
 using Test
 using TestRunner
 
+# `sin_domain_error`/`cos_domain_error` were replaced by `throw_finite_domainerror`
+# on Julia 1.14
+const SIN_DOMAIN_ERROR = r"sin_domain_error|throw_finite_domainerror"
+const COS_DOMAIN_ERROR = r"cos_domain_error|throw_finite_domainerror"
+
 module ErrorTest end
 @testset "Test failure handling" TestRunner.TestRunnerMetaTestSet begin
     testfile = joinpath(@__DIR__, "testfile_error_handling.jl")
@@ -46,7 +51,7 @@ module ExceptionTest1 end
     @test results11.orig_expr == "sin(Inf) == π"
     @test results11.test_type === :test_error
     @test occursin("DomainError with Inf", sprint(show, results11))
-    @test occursin("sin_domain_error", results11.backtrace)
+    @test occursin(SIN_DOMAIN_ERROR, results11.backtrace)
 end
 
 module ExceptionTest2 end
@@ -70,7 +75,7 @@ module ExceptionTest2 end
     @test results11.orig_expr == "funccall(cos, Inf) == π"
     @test results11.test_type === :test_error
     @test occursin("DomainError with Inf", sprint(show, results11))
-    @test occursin("cos_domain_error", results11.backtrace)
+    @test occursin(COS_DOMAIN_ERROR, results11.backtrace)
 end
 
 module ExceptionTest3 end
@@ -92,8 +97,11 @@ module ExceptionTest3 end
     results11 = only(results1.results)
     @test results11 isa Test.Error
     @test results11.test_type === :nontest_error
+    # the exception itself should be recorded, not the `rethrow` re-raising it
+    @test startswith(results11.value, "DomainError")
     @test occursin("DomainError with Inf", sprint(show, results11))
-    @test occursin("sin_domain_error", results11.backtrace)
+    @test occursin(SIN_DOMAIN_ERROR, results11.backtrace)
+    @test !occursin("caused by", results11.backtrace)
 end
 
 module ExceptionTest4 end
@@ -116,7 +124,7 @@ module ExceptionTest4 end
     @test results11 isa Test.Error
     @test results11.test_type === :test_error
     @test_broken occursin("DomainError with Inf", sprint(show, results11))
-    @test_broken occursin("sin_domain_error", results11.backtrace)
+    @test_broken occursin(SIN_DOMAIN_ERROR, results11.backtrace)
 end
 
 end # module test_error_handling

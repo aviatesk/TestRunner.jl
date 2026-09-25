@@ -44,20 +44,52 @@ let testmodule_file = normpath(pkgdir(TestRunner), "test", "testfile_module.jl")
     @test result.n_passed == 1
 end
 
+module ComplexRunnerModule end
 module Nested1RunnerModule end
 module Nested2RunnerModule end
 @testset "nested testsets" begin
-    # Test running a specific nested testset by name
+    # Test that tests are recorded into the testsets enclosing them
+    let result = @testset "complex runner" runtest(TESTFILE, ("complex",); topmodule=ComplexRunnerModule)
+        complex = only(result.results)
+        @test complex.n_passed == 2
+        @test Test.Broken in map(typeof, complex.results)
+        nested = filter(r -> r isa Test.DefaultTestSet, complex.results)
+        @test [ts.description for ts in nested] == ["nested1", "nested2"]
+        @test [ts.n_passed for ts in nested] == [2, 2]
+    end
+
+    # Test running a specific nested testset by name:
+    # the enclosing testset is run as well, but without its other tests
     let result = @testset "nested1 runner" runtest(TESTFILE, ("nested1",); topmodule=Nested1RunnerModule)
-        @test length(result.results) == 1
-        @test only(result.results).n_passed == 2
-        @test only(only(result.results).results) isa Test.Broken
+        complex = only(result.results)
+        @test complex.description == "complex"
+        @test complex.n_passed == 0
+        nested1 = only(complex.results)
+        @test nested1.description == "nested1"
+        @test nested1.n_passed == 2
+        @test only(nested1.results) isa Test.Broken
     end
 
     # Test running another nested testset
     let result = @testset "nested2 runner" runtest(TESTFILE, ("nested2",); topmodule=Nested2RunnerModule)
-        @test length(result.results) == 1
-        @test only(result.results).n_passed == 2
+        complex = only(result.results)
+        @test complex.n_passed == 0
+        nested2 = only(complex.results)
+        @test nested2.description == "nested2"
+        @test nested2.n_passed == 2
+    end
+end
+
+module LazyScopedValueRunnerModule end
+@static if isdefined(Base.ScopedValues, :LazyScopedValue)
+    const LAZY_SCOPED_VALUE = Base.ScopedValues.LazyScopedValue{Bool}(Base.OncePerProcess{Bool}(() -> false))
+    @testset "lazy scoped value in scope" begin
+        result = Base.ScopedValues.with(LAZY_SCOPED_VALUE => true) do
+            @testset "lazy scoped value runner" runtest(TESTFILE, ("nested1",); topmodule=LazyScopedValueRunnerModule)
+        end
+        nested1 = only(only(result.results).results)
+        @test nested1.description == "nested1"
+        @test nested1.n_passed == 2
     end
 end
 
@@ -65,8 +97,10 @@ module PatternNestedRunnerModule end
 @testset "pattern matching in nested" begin
     # Test expression pattern matching within nested testsets
     result = @testset "pattern in nested1 runner" runtest(TESTFILE, (:(@test nestedfunc1(x_) ≈ y_),); topmodule=PatternNestedRunnerModule)
-    @test result.n_passed == 1
-    @test length(result.results) == 0
+    @test result.n_passed == 0
+    nested1 = only(only(result.results).results)
+    @test nested1.description == "nested1"
+    @test nested1.n_passed == 1
 end
 
 module BrokenTestsRunnerModule end
@@ -136,7 +170,8 @@ module LinePatternModule3 end
 
     # Test single line number within test set
     let result = @testset "line range" runtest(line_pattern_file, [12]; topmodule=LinePatternModule2)
-        @test result.n_passed == 1  # The standalone test on line 12
+        @test result.n_passed == 0
+        @test only(result.results).n_passed == 1  # The test on line 12 in "math tests"
     end
 
     # Test combining line numbers with other patterns
@@ -153,10 +188,10 @@ module DependencyModule1 end
 module DependencyModule2 end
 let dependency_file = joinpath(@__DIR__, "testfile_dependency_tracking.jl")
     let result = @testset "dependency tracking 1" runtest(dependency_file, [:(@test length(xs1) == 1)]; topmodule=DependencyModule1)
-        @test result.n_passed == 1
+        @test only(result.results).n_passed == 1
     end
     let result = @testset "dependency tracking 2" runtest(dependency_file, [:(@test length(xs2) == 2)]; topmodule=DependencyModule2)
-        @test result.n_passed == 1
+        @test only(result.results).n_passed == 1
     end
 end
 
@@ -164,12 +199,14 @@ module IncludedTests1 end
 module IncludedTests2 end
 let testfile = joinpath(@__DIR__, "testfile_included_tests.jl")
     let result = @testset "included tests 1" runtest(testfile, ["included1"]; topmodule=IncludedTests1)
-        @test length(result.results) == 1
-        @test only(result.results).n_passed == 2
+        included1 = only(only(result.results).results)
+        @test included1.description == "included1"
+        @test included1.n_passed == 2
     end
     let result = @testset "included tests 2" runtest(testfile, [:(include("_testfile_included2.jl"))]; topmodule=IncludedTests2)
-        @test length(result.results) == 1
-        @test only(result.results).n_passed == 2
+        testset2 = only(only(result.results).results)
+        @test testset2.description == "testset 2"
+        @test testset2.n_passed == 2
     end
 end
 
@@ -187,10 +224,11 @@ module RunTestsModule3 end
             testfile => ["included1"],
             included1 => [:(@test 1 > 0)]
         ]; topmodule=RunTestsModule1)
-            # Should run "included1" testset (2 tests) and one specific test from included1
+            # Should run "included1" testset with one specific test from included1
             @test result.n_passed == 0
-            @test length(result.results) == 1
-            @test only(result.results).n_passed == 1  # The specific test from included1
+            included1_testset = only(only(result.results).results)
+            @test included1_testset.description == "included1"
+            @test included1_testset.n_passed == 1  # The specific test from included1
         end
 
         # Run with empty patterns for entry file (no tests) but specific pattern in included file
@@ -199,8 +237,9 @@ module RunTestsModule3 end
             included2 => ["testset 2"]
         ]; topmodule=RunTestsModule2)
             # Should only run "testset 2" from included2
-            @test length(result.results) == 1
-            @test only(result.results).n_passed == 2
+            testset2 = only(only(result.results).results)
+            @test testset2.description == "testset 2"
+            @test testset2.n_passed == 2
         end
 
         # Test with line-based filtering
@@ -212,8 +251,9 @@ module RunTestsModule3 end
         ]; topmodule=RunTestsModule3)
             # Should only run the test on line 6
             @test result.n_passed == 0
-            @test length(result.results) == 1
-            @test only(result.results).n_passed == 1  # The specific test from included1
+            included1_testset = only(only(result.results).results)
+            @test included1_testset.description == "included1"
+            @test included1_testset.n_passed == 1  # The specific test from included1
         end
     end
 end
