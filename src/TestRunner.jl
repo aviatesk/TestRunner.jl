@@ -41,6 +41,10 @@ const current_interpreter = Ref{TRInterpreter}()
 
 const errors_and_fails = Dict{Union{Test.Error,Test.Fail},Vector{Any}}()
 
+# Keeps the results of the outermost `TestRunnerTestSet` available even when finishing it
+# throws `Test.TestSetException`
+const last_toplevel_testset = Ref{Union{Nothing,Test.DefaultTestSet}}(nothing)
+
 include("TestRunnerTestSet.jl")
 
 """

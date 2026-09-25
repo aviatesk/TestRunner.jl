@@ -214,7 +214,9 @@ Options:
 - `--project[=<dir>]` - Set project/environment (same format and meaning as Julia's `--project` flag)
 - `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
 - `--verbose` or `-v` - Show verbose output
-- `--json` - Output results in JSON format for machine-readable test results
+- `--json` - Output results in JSON format for machine-readable test results.
+  When patterns are given, the results of the individual test sets are included
+  as well, along with the lines of their `@testset`s
 - `--read-stdin` - Read source for the given file path from stdin instead of disk.
   The path is still used for `@__FILE__`, error messages, and resolving `include`d files
 
