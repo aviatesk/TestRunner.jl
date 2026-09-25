@@ -44,6 +44,9 @@ end
 include(joinpath(dirname(pathof(StructUtils)), "../test/macros.jl"))
 include(joinpath(dirname(pathof(StructUtils)), "../test/struct.jl"))
 include(joinpath(dirname(pathof(StructUtils)), "../test/selectors.jl"))
+include(joinpath(dirname(pathof(StructUtils)), "../test/construction.jl"))
+include(joinpath(dirname(pathof(StructUtils)), "../test/ignore_inbound.jl"))
+include(joinpath(dirname(pathof(StructUtils)), "../test/iso_lift.jl"))
 
 @testset "StructUtils" begin
 
@@ -408,6 +411,59 @@ end
     @test !StructUtils.structlike(StructUtils.DefaultStyle(), NonStructComplex)
 end
 
+@testset "@nonstruct representation in make: #29" begin
+    mapping = Dict{String,Any}("leaf" => 1)
+    value = NonStructMapping(mapping)
+
+    # Root values use the same representation as values nested in a source.
+    @test StructUtils.make(Dict{String,Any}, value) == mapping
+    @test StructUtils.make(NonStructMappingTarget, value) == NonStructMappingTarget(1)
+
+    @test StructUtils.make(
+        Dict{String,Any},
+        NonStructMappingHolder(value),
+    ) == Dict{String,Any}("value" => mapping)
+    @test StructUtils.make(Vector{Any}, Any[value]) == Any[mapping]
+    @test StructUtils.make(
+        Dict{String,Any},
+        Dict{String,Any}("value" => value),
+    ) == Dict{String,Any}("value" => mapping)
+
+    # Lowering may produce a concrete value satisfying an abstract target.
+    @test StructUtils.make(AbstractDict, value) === mapping
+    @test StructUtils.make(
+        AbstractNonStructMappingTarget,
+        value,
+    ) == ConcreteNonStructMappingTarget(1)
+
+    # Style-specific lowering is honored exactly once at the root.
+    style = NonStructMappingStyle(0)
+    @test StructUtils.make(Dict{String,Any}, value, style) == mapping
+    @test style.lower_calls == 1
+
+    # A target-owned make hook still receives the raw source.
+    hook_style = NonStructMappingStyle(0)
+    made = StructUtils.make(NonStructCustomMakeTarget, value, hook_style)
+    @test made.saw_raw_source
+    @test hook_style.lower_calls == 0
+
+    # Making a non-struct target continues to use lift on the raw source.
+    @test StructUtils.make(NonStructMapping, mapping).value === mapping
+end
+
+@testset "struct-like lower may call make: #66" begin
+    style = RecursiveLowerStyle()
+    value = RecursiveLowerRoot(RecursiveLowerLeaf(2), "root")
+    expected = Dict{String,Any}(
+        "leaf" => Dict{String,Any}("value" => 2),
+        "label" => "root",
+    )
+
+    @test StructUtils.lower(style, value) == expected
+    @test StructUtils.make(style, Dict{String,Any}, value) == (expected, nothing)
+    @test StructUtils.make(Dict{String,Any}, value, style) == expected
+end
+
 @testset "Set make: #13" begin
     @test StructUtils.make(Set{Symbol}, Any["FACTOR"]) == Set{Symbol}([:FACTOR])
 end
@@ -513,6 +569,29 @@ end
     @test StructUtils.structlike(StructUtils.DefaultStyle(), BigFloat) == false
 end
 
+@testset "Number subtypes are atoms" begin
+    # A Number is represented by its value, not its field layout. The rule has to reach
+    # subtypes: before this, only the exact type `Number` matched, so every user-defined
+    # Number struct was classified struct-like and could not be made from a scalar.
+    @test StructUtils.structlike(Centi) == false
+    @test StructUtils.structlike(StructUtils.DefaultStyle(), Centi) == false
+    @test StructUtils.make(Centi, 4.0) == Centi(400)
+    @test StructUtils.make(Centi, 4) == Centi(400)
+    @test StructUtils.make(CentiHolder, (x=4.0,)) == CentiHolder(Centi(400))
+    @test StructUtils.make(Vector{Centi}, [1.0, 2.0]) == [Centi(100), Centi(200)]
+
+    # Primitive numbers were never struct types, so they are unaffected.
+    @test StructUtils.structlike(Int) == false
+    @test StructUtils.structlike(Float64) == false
+    @test StructUtils.structlike(Bool) == false
+
+    # ...but multi-component numbers have no scalar form and keep their field layout.
+    @test StructUtils.structlike(Complex{Float64}) == true
+    @test StructUtils.structlike(Rational{Int}) == true
+    @test StructUtils.make(Complex{Float64}, (re=1.0, im=2.0)) == 1.0 + 2.0im
+    @test StructUtils.make(Rational{Int}, (num=3, den=4)) == 3//4
+end
+
 @testset "keyeq with Tuple" begin
     # Test basic tuple functionality
     @test StructUtils.keyeq(:a, ("a", "b", "c"))
@@ -575,6 +654,68 @@ end
     @test StructUtils.make(Vector{SVector{2,Int}}, [[1, 2], [3, 4]]) == [SVector{2,Int}((1, 2)), SVector{2,Int}((3, 4))]
 end
 
+@testset "absent fields take the null their type admits" begin
+    NT = NamedTuple{(:a, :b),Tuple{Union{Missing,Int},Union{Missing,String}}}
+    @test isequal(StructUtils.make(NT, Dict("a" => 1)), (a=1, b=missing))
+    @test isequal(StructUtils.make(AbsentMissing, Dict("a" => 1)), AbsentMissing(1, missing))
+    @test StructUtils.make(AbsentNothing, Dict("a" => 1)) == AbsentNothing(1, nothing)
+    @test isequal(StructUtils.make(Tuple{Int,Union{Missing,String}}, [1]), (1, missing))
+    # `nothing` wins when both are admitted, matching `lift`
+    @test StructUtils.make(NamedTuple{(:a,),Tuple{Union{Missing,Nothing,Int}}}, Dict()) == (a=nothing,)
+    err = try; StructUtils.make(NamedTuple{(:a,),Tuple{String}}, Dict()); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("field `a`", err.msg)
+    @test_throws ArgumentError StructUtils.make(Tuple{Int,String}, [1])
 end
 
+@testset "applyeach lowers every key and index" begin
+    keys(x) = (ks = Any[]; StructUtils.applyeach(StringKeyStyle(), (k, v) -> push!(ks, k), x); ks)
+    @test keys([10, 20]) == ["1", "2"]
+    @test keys((10, 20)) == ["1", "2"]
+    @test keys(Set([10])) == ["1"]
+    @test keys((x for x in [10, 20])) == ["1", "2"]
+    @test keys(Core.svec(10, 20)) == ["1", "2"]
+    @test keys(Union{Int,String}[10, "a"]) == ["1", "2"]
+    @test keys(Vector{Any}(undef, 2)) == ["1", "2"]
+    @test keys((a=1,)) == ["a"]
+    @test keys(Dict(:a => 1)) == ["a"]
+end
+
+@testset "union-typed fields and elements reach f one member at a time" begin
+    seen(x) = (vs = Any[]; StructUtils.applyeach(StructUtils.DefaultStyle(), (k, v) -> push!(vs, v), x); vs)
+    @test seen(WideUnion(1)) == [1]
+    @test seen(WideUnion("s")) == ["s"]
+    @test seen(WideUnion(nothing)) == [nothing]
+    @test seen(Union{Nothing,Int,String,Float64,Bool}[1, "s", nothing, 2.5, true]) == [1, "s", nothing, 2.5, true]
+    @test seen((a=1, b=nothing)) == [1, nothing]
+    visits = Int[]
+    result = StructUtils.applyeach(Union{Nothing,Int,String,Float64,Bool}[1, "s", nothing]) do k, v
+        push!(visits, k)
+        StructUtils.EarlyReturn(v)
+    end
+    @test result.value == 1
+    @test visits == [1]
+end
+
+@testset "style-first applyeach overloads are unambiguous with the do-block form" begin
+    collected = []
+    @test StructUtils.applyeach(PinStyle(), (k, v) -> push!(collected, k => v), Pinned(3)) !== nothing
+    StructUtils.applyeach(PinStyle(), Pinned(3)) do k, v
+        push!(collected, k => v)
+    end
+    @test collected == ["x" => 3, "x" => 3]
+    sink = CallableCollector([])
+    StructUtils.applyeach(sink, PinStyle(), Pinned(3))
+    StructUtils.applyeach(PinStyle(), sink, Pinned(4))
+    StructUtils.applyeach(sink, [5])
+    @test sink.values == ["x" => 3, "x" => 4, 1 => 5]
+    @test !Base.isambiguous(
+        which(StructUtils.applyeach, (CallableCollector, PinStyle, Pinned)),
+        which(StructUtils.applyeach, (PinStyle, CallableCollector, Pinned)),
+    )
+    @test_throws MethodError StructUtils.applyeach(sink, nothing, [1])
+end
+
+end
+
+include(joinpath(dirname(pathof(StructUtils)), "../test/lazily_initialized_fields.jl"))
 include("trim_compile_tests.jl")

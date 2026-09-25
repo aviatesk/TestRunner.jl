@@ -1,25 +1,27 @@
+version = "2.9.2"
 name = "StructUtils"
 uuid = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
-version = "2.8.2"
+
+[extras]
+LazilyInitializedFields = "0e77f7df-68c5-4e49-93ce-4cd80f5598bf"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+StaticArraysCore = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
-[extras]
-Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
-StaticArraysCore = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
-Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
-Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
+[targets]
+test = ["Dates", "LazilyInitializedFields", "Measurements", "StaticArrays", "StaticArraysCore", "Tables", "Test", "UUIDs"]
 
 [compat]
+LazilyInitializedFields = "1"
 julia = "1.9"
 StaticArraysCore = "1"
 Tables = "1"
 Measurements = "2"
-
-[targets]
-test = ["Dates", "Measurements", "StaticArrays", "StaticArraysCore", "Tables", "Test", "UUIDs"]

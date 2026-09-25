@@ -156,26 +156,27 @@ function _fieldtag(st::StructStyle, ft, field)
 end
 
 @generated function _fieldtagtuple(st::StructStyle, ::Type{T}, fsyms) where {T}
-    n = fieldcount(T)
-    vals = [:(_fieldtag(st, ft, $(QuoteNode(fieldname(T, i))))) for i = 1:n]
+    t = Expr(:tuple)
+    for i = 1:fieldcount(T)
+        push!(t.args, :(_fieldtag(st, ft, $(QuoteNode(fieldname(T, i))))))
+    end
     return quote
         Base.@_inline_meta
         ft = fieldtags(st, T)
         if isempty(ft)
             return _fieldtagtuple_public(st, T, fsyms)
         else
-            return ($(vals...),)
+            return $t
         end
     end
 end
 
 @generated function _fieldtagtuple_public(st::StructStyle, ::Type{T}, fsyms) where {T}
-    n = fieldcount(T)
-    vals = [:(fieldtags(st, T, $(QuoteNode(fieldname(T, i))))) for i = 1:n]
-    return quote
-        Base.@_inline_meta
-        return ($(vals...),)
+    t = Expr(:tuple)
+    for i = 1:fieldcount(T)
+        push!(t.args, :(fieldtags(st, T, $(QuoteNode(fieldname(T, i))))))
     end
+    return Expr(:block, :(Base.@_inline_meta), :(return $t))
 end
 
 """
@@ -310,9 +311,17 @@ structlike(::Type{<:AbstractString}) = false
 structlike(::Type{Symbol}) = false
 structlike(::Type{Regex}) = false
 structlike(::Type{<:Dates.TimeType}) = false
-structlike(::Type{Number}) = false
-structlike(::Type{BigInt}) = false
-structlike(::Type{BigFloat}) = false
+# A `Number` is an atom: it is represented by its value, not by its field layout. This
+# has to cover subtypes rather than just `Number` itself; `BigInt` and `BigFloat` used to
+# be listed here individually precisely because a `::Type{Number}` method never reached
+# them, which also left every user-defined `Number` struct (fixed-point decimals, unit
+# wrappers, ...) classified as struct-like and therefore unreadable from a scalar source.
+structlike(::Type{<:Number}) = false
+# ...except multi-component numbers, which have no single scalar representation and so
+# keep their field layout. Note `lower` overloads may still be used to control exactly
+# which fields these serialize as.
+structlike(::Type{<:Complex}) = true
+structlike(::Type{<:Rational}) = true
 structlike(::Type{Nothing}) = false
 structlike(::Type{Missing}) = false
 structlike(::Type{UUID}) = false
@@ -346,6 +355,11 @@ Domain value transformation function. This function is called by
 calling the apply function. By default, `lower` is the identity function.
 This allows a domain transformation of values according to the
 style used.
+
+When [`StructUtils.make`](@ref) uses a structural or container builder, it
+also calls `lower` once on a root source that is not struct-like. Struct-like
+root sources are traversed directly, so their `lower` methods may call `make`
+to reuse its field mapping without recursion.
 """
 function lower end
 
@@ -423,6 +437,143 @@ lift(::Type{VersionNumber}, x::AbstractString) = VersionNumber(x)
 lift(::Type{MIME}, x::AbstractString) = MIME(x)
 lift(::Type{Regex}, x::AbstractString) = Regex(x)
 lift(::Type{T}, x::AbstractString) where {T<:Dates.TimeType} = T(x)
+lift(::Type{Dates.Date}, x::AbstractString) = _liftdate(String(x))
+lift(::Type{Dates.DateTime}, x::AbstractString) = _liftdatetime(String(x))
+lift(::Type{Dates.Time}, x::AbstractString) = _lifttime(String(x))
+
+# ISO 8601 parsers for the three core Dates types. The `Date(str)` family
+# routes through the DateFormat machinery, whose token handling and
+# diagnostics are too dynamic for static compilation (`juliac --trim`); these
+# accept exactly the grammar the default formats do — variable-width numeric
+# fields, an optional year sign, progressively optional smaller fields, and a
+# 1-3 digit fraction — and construct through the validating constructors.
+@inline function _isodigits(s::String, i::Int, maxwidth::Int)
+    n = ncodeunits(s)
+    value = 0
+    width = 0
+    while i <= n && width < maxwidth
+        b = codeunit(s, i)
+        (UInt8('0') <= b <= UInt8('9')) || break
+        value = 10 * value + Int(b - UInt8('0'))
+        i += 1
+        width += 1
+    end
+    return width == 0 ? -1 : value, i
+end
+
+@inline _isochar(s::String, i::Int, c::Char) =
+    i <= ncodeunits(s) && codeunit(s, i) == UInt8(c)
+
+# The default formats treat input as the token sequence
+# `y - m - d T H : M : S . s` (dates stop after `d`, times start at `H`):
+# numeric fields are variable-width, the year may carry a sign, delimiters
+# must match in exact order, and input may end after any complete token —
+# remaining fields default. A missing numeric field, a wrong delimiter, or
+# trailing content is an error.
+macro _isofield(var, maxwidth)
+    esc(quote
+        i > n && @goto done
+        $var, i = _isodigits(s, i, $maxwidth)
+        $var == -1 && throw(ArgumentError(errmsg))
+    end)
+end
+
+macro _isodelim(c)
+    esc(quote
+        i > n && @goto done
+        codeunit(s, i) == UInt8($c) || throw(ArgumentError(errmsg))
+        i += 1
+    end)
+end
+
+function _isoparse(s::String, withdate::Bool, withtime::Bool)
+    errmsg = withtime ? (withdate ? "invalid ISO 8601 date-time" : "invalid ISO 8601 time") : "invalid ISO 8601 date"
+    n = ncodeunits(s)
+    i = 1
+    y = 0
+    m = 1
+    d = 1
+    h = 0
+    mi = 0
+    sec = 0
+    ms = 0
+    if withdate
+        negative = _isochar(s, i, '-')
+        (negative || _isochar(s, i, '+')) && (i += 1)
+        y, i = _isodigits(s, i, 18)
+        y == -1 && throw(ArgumentError(errmsg))
+        negative && (y = -y)
+        @_isodelim '-'
+        @_isofield m 2
+        @_isodelim '-'
+        @_isofield d 2
+        withtime || @goto done
+        @_isodelim 'T'
+        @_isofield h 2
+    else
+        # the leading field is required: time-only input may not be empty
+        h, i = _isodigits(s, i, 2)
+        h == -1 && throw(ArgumentError(errmsg))
+    end
+    @_isodelim ':'
+    @_isofield mi 2
+    @_isodelim ':'
+    @_isofield sec 2
+    @_isodelim '.'
+    i > n && @goto done
+    fraction_start = i
+    ms, i = _isodigits(s, i, 3)
+    ms == -1 && throw(ArgumentError(errmsg))
+    # the fraction is at most three digits (milliseconds), scaled as if
+    # right-padded: ".4" is 400 milliseconds
+    for _ = 1:(3 - (i - fraction_start))
+        ms *= 10
+    end
+    @label done
+    i > n || throw(ArgumentError(errmsg))
+    return y, m, d, h, mi, sec, ms
+end
+
+function _liftdate(s::String)
+    y, m, d, _, _, _, _ = _isoparse(s, true, false)
+    return Dates.Date(y, m, d)
+end
+
+function _liftdatetime(s::String)
+    # `DateTime(str)` rejects time-zone designators, but RFC 3339 date-times
+    # with an offset — `2026-08-07T15:00:00Z`, `…+02:00` — are what most JSON
+    # producers emit. Accept them here and normalize to UTC; without an
+    # offset the value is taken as-is, exactly like the constructor.
+    n = ncodeunits(s)
+    offsetminutes = 0
+    body = s
+    if n > 1 && codeunit(s, n) == UInt8('Z') &&
+       any(i -> codeunit(s, i) == UInt8('T'), 1:(n - 1))
+        body = String(view(codeunits(s), 1:(n - 1)))
+    elseif n >= 6 &&
+           (codeunit(s, n - 5) == UInt8('+') || codeunit(s, n - 5) == UInt8('-')) &&
+           codeunit(s, n - 2) == UInt8(':') &&
+           # require a 'T' before the sign so a date's own '-' never matches
+           any(i -> codeunit(s, i) == UInt8('T'), 1:(n - 6))
+        all(i -> UInt8('0') <= codeunit(s, i) <= UInt8('9'), (n - 4, n - 3, n - 1, n)) ||
+            throw(ArgumentError("invalid ISO 8601 date-time"))
+        hours = 10 * Int(codeunit(s, n - 4) - UInt8('0')) +
+                Int(codeunit(s, n - 3) - UInt8('0'))
+        minutes = 10 * Int(codeunit(s, n - 1) - UInt8('0')) +
+                  Int(codeunit(s, n) - UInt8('0'))
+        offsetminutes = (codeunit(s, n - 5) == UInt8('+') ? -1 : 1) *
+                        (60 * hours + minutes)
+        body = String(view(codeunits(s), 1:(n - 6)))
+    end
+    y, m, d, h, mi, sec, ms = _isoparse(body, true, true)
+    value = Dates.DateTime(y, m, d, h, mi, sec, ms)
+    return offsetminutes == 0 ? value : value + Dates.Minute(offsetminutes)
+end
+
+function _lifttime(s::String)
+    _, _, _, h, mi, sec, ms = _isoparse(s, false, true)
+    return Dates.Time(h, mi, sec, ms)
+end
 
 function lift(::Type{T}, x::AbstractString) where {T<:Enum}
     sym = Symbol(x)
@@ -517,8 +668,10 @@ end
 
 Note that `applyeach` must include the `style` argument when overloading.
 
-Also note that before applying `f`, the key or index is passed through `StructUtils.lowerkey(style, k)`,
-and the value `v` is passed through `StructUtils.lower(style, v)`.
+Before applying `f`, keys and indices pass through `StructUtils.lowerkey(style, k)`
+and values pass through `StructUtils.lower(style, v)`.
+The callback-first forms `applyeach(f, x)` and `applyeach(f, style, x)` also accept callable
+structs. Define overloads in style-first order.
 
 If a value is `#undef` or otherwise not defined, the `f` function should generally be called with `nothing` or skipped.
 """
@@ -551,12 +704,41 @@ struct _MatchedState{T}
 end
 
 applyeach(f, x) = applyeach(DefaultStyle(), f, x)
-applyeach(f, st::StructStyle, x) = applyeach(st, f, x)
+# Leave both leading arguments unconstrained so every style-first overload is more
+# specific, without excluding callable structs from the callback-first form.
+function applyeach(f, st, x)
+    st isa StructStyle || throw(MethodError(applyeach, (f, st, x)))
+    return applyeach(st, f, x)
+end
+
+# `f(key, lower(st, val))` with `val` narrowed to one member of the union `U` at a time.
+# Inference splits a union of at most four members, and none inside a recursive cycle, so a
+# wider union or one met while recursing (a tree of structs) would reach `f` as one dynamic
+# call; each `isa` branch here is a statically resolved call instead.
+@generated function _applysplit(f, key, val, ::Type{U}, st, tags) where {U}
+    call = tags === Nothing ? :(f(key, lower(st, val))) : :(f(key, lower(st, val, tags)))
+    ex = call
+    if U isa Union
+        for M in reverse(Base.uniontypes(U))
+            ex = :(val isa $M ? $call : $ex)
+        end
+    end
+    # Wide struct unions otherwise duplicate the ladder at every field. Keep one
+    # compiled helper; array loops still benefit from inlining the same ladder.
+    if tags !== Nothing && U isa Union && length(Base.uniontypes(U)) > 4
+        return quote
+            Base.@_noinline_meta
+            $ex
+        end
+    end
+    return ex
+end
 
 function applyeach(st::StructStyle, f, x::AbstractArray)
     for i in eachindex(x)
         ret = if @inbounds(isassigned(x, i))
-            f(lowerkey(st, i), lower(st, @inbounds(x[i])))
+            eltype(x) isa Union ? _applysplit(f, lowerkey(st, i), @inbounds(x[i]), eltype(x), st, nothing) :
+                f(lowerkey(st, i), lower(st, @inbounds(x[i])))
         else
             f(lowerkey(st, i), lower(st, nothing))
         end
@@ -598,20 +780,24 @@ function applyeach(st::StructStyle, f, x::T) where {T}
         ex = quote
             defs = fielddefaults(st, T)
         end
+        keyex = :(lowerkey(st, fname))
         for i = 1:N
             fname = Meta.quot(fieldname(T, i))
+            FT = fieldtype(T, i)
+            valex = FT isa Union ? :(_applysplit(f, $keyex, getfield(x, $i), $FT, st, ftags)) :
+                                   :(f($keyex, lower(st, getfield(x, $i), ftags)))
             push!(ex.args, quote
                 ftags = fieldtags(st, T, $fname)
                 if !haskey(ftags, :ignore) || !ftags.ignore
                     fname = get(ftags, :name, $fname)
                     ret = if isdefined(x, $i)
-                        f(lowerkey(st, fname), lower(st, getfield(x, $i), ftags))
+                        $valex
                     elseif haskey(defs, $fname)
                         # this branch should be really rare because we should
                         # have applied a field default in the struct constructor
-                        f(lowerkey(st, fname), lower(st, defs[$fname], ftags))
+                        f($keyex, lower(st, defs[$fname], ftags))
                     else
-                        f(lowerkey(st, fname), lower(st, nothing, ftags))
+                        f($keyex, lower(st, nothing, ftags))
                     end
                     ret isa EarlyReturn && return ret
                 end
@@ -626,12 +812,13 @@ function applyeach(st::StructStyle, f, x::T) where {T}
             ftags = fieldtags(st, T, fname)
             if !haskey(ftags, :ignore) || !ftags.ignore
                 fname = get(ftags, :name, fname)
+                key = lowerkey(st, fname)
                 ret = if isdefined(x, i)
-                    f(lowerkey(st, fname), lower(st, getfield(x, i), ftags))
+                    f(key, lower(st, getfield(x, i), ftags))
                 elseif haskey(defs, fname)
-                    f(lowerkey(st, fname), lower(st, defs[fname], ftags))
+                    f(key, lower(st, defs[fname], ftags))
                 else
-                    f(lowerkey(st, fname), lower(st, nothing, ftags))
+                    f(key, lower(st, nothing, ftags))
                 end
                 ret isa EarlyReturn && return ret
             end
@@ -779,7 +966,7 @@ function (f::MultiDimClosure{S,A})(i::Int, val) where {S,A}
     f.dims[f.cur_dim[]] = i
     if arraylike(f.style, val) && f.cur_dim[] > 1
         f.cur_dim[] -= 1
-        st = applyeach(f, f.style, val)
+        st = applyeach(f.style, f, val)
         f.cur_dim[] += 1
     else
         val, st = make(f.style, eltype(f.arr), val)
@@ -811,6 +998,11 @@ the automatic "all argument" constructor that structs have defined by default (e
 
 `make` calls `applyeach` on the `source` object, where the key-value pairs
 from `source` will be used in constructing `T`.
+
+Before structural construction, `make` calls [`StructUtils.lower`](@ref) on a
+root source for which [`StructUtils.structlike`](@ref) is `false`. Struct-like
+root sources are traversed directly. `applyeach` still lowers their nested
+values.
 
 The 3rd definition takes a `style` argument, allowing for overloads of non-owned types `T`.
 The main difference between this and the 2nd definition is that the 3rd definition allows for
@@ -846,11 +1038,79 @@ end
 @inline abstractcollectionpassthrough(style::StructStyle, ::Type{T}, source) where {T} =
     isabstracttype(T) && source isa T && (dictlike(style, T) || arraylike(style, T))
 
-function make(style::StructStyle, T::Type, source, tags)
+# Non-struct sources opt into representation lowering at the root. Structural
+# sources stay intact so a custom `lower` method can call `make` to traverse
+# their fields without immediately calling itself again.
+@inline _lowerrootsource(style::StructStyle, source) =
+    structlike(style, source) ? source : lower(style, source)
+
+# Optional integrations can select a target when one member of a Union has
+# package-specific meaning. Returning `nothing` leaves the normal Union
+# disambiguation unchanged.
+@inline _unionmember(
+    ::StructStyle,
+    ::Type{T},
+    ::Type{M},
+    @nospecialize(source),
+) where {T,M} = nothing
+
+@inline _unionbody(T::Type) = T isa UnionAll ? Base.unwrap_unionall(T) : T
+@inline _isuniontype(T::Type) = _unionbody(T) isa Union
+@inline _rewrapunionmember(T::Type, member) =
+    T isa UnionAll ? Base.rewrap_unionall(member, T) : member
+
+# Keep member types constant so extension dispatch remains visible to trimming.
+@generated function _unionmembers(::Type{T}) where {T}
+    return QuoteNode(Tuple(Base.uniontypes(_unionbody(T))))
+end
+
+@generated function _specialuniontype(style::StructStyle, ::Type{T}, source) where {T}
+    ex = Expr(:block)
+    for member in Base.uniontypes(_unionbody(T))
+        push!(ex.args, quote
+            selected = _unionmember(style, T, $member, source)
+            selected === nothing || return _rewrapunionmember(T, selected)
+        end)
+    end
+    push!(ex.args, :(return nothing))
+    return ex
+end
+
+# Exactly one array-like member and one scalar member can be told apart by the shape of
+# the source, so only a two-member union (after Nothing/Missing were peeled) qualifies.
+@generated function _uniontype(style::StructStyle, ::Type{T}, source) where {T}
+    members = Base.uniontypes(_unionbody(T))
+    length(members) == 2 || return :(return nothing)
+    a, b = members
+    return quote
+        aa = arraylike(style, $a)
+        ba = arraylike(style, $b)
+        if aa && !ba
+            return _rewrapunionmember(T, arraylike(style, source) ? $a : $b)
+        elseif ba && !aa
+            return _rewrapunionmember(T, arraylike(style, source) ? $b : $a)
+        end
+        return nothing
+    end
+end
+
+# Keep normal `make` dispatch at the public boundary so exact custom methods
+# and `@choosetype` methods win first. The concrete `Val{T}` token then gives
+# the default implementation a specialized signature even when `T` is a
+# Union, which avoids duplicating Union behavior in generated field code.
+function make(style::StructStyle, ::Type{T}, source, tags) where {T}
+    return _make(style, Val{T}(), source, tags)
+end
+
+function _make(style::StructStyle, ::Val{T}, source, tags) where {T}
     if haskey(tags, :choosetype)
         return make(style, tags.choosetype(source), source, _delete(tags, :choosetype))
     end
     if T !== Any
+        if _isuniontype(T)
+            selected = _specialuniontype(style, T, source)
+            selected === nothing || return make(style, selected, source, tags)
+        end
         if T >: Missing && T !== Missing
             if nulllike(style, source)
                 return make(style, Missing, source, tags)
@@ -864,37 +1124,9 @@ function make(style::StructStyle, T::Type, source, tags)
                 return make(style, Base.nonnothingtype(T), source, tags)
             end
         end
-        # for Union types like Union{T, Vector{T}} (after Nothing/Missing have been peeled),
-        # we can disambiguate by checking if source is arraylike;
-        # only applies when there's exactly one arraylike and one non-arraylike member
-        if T isa Union
-            types = Base.uniontypes(T)
-            arr_type = nothing
-            scalar_type = nothing
-            ambiguous = false
-            for t in types
-                if arraylike(style, t)
-                    # more than one arraylike type means we can't disambiguate
-                    if arr_type !== nothing
-                        ambiguous = true
-                        break
-                    end
-                    arr_type = t
-                else
-                    if scalar_type !== nothing
-                        ambiguous = true
-                        break
-                    end
-                    scalar_type = t
-                end
-            end
-            if !ambiguous && arr_type !== nothing && scalar_type !== nothing
-                if arraylike(style, source)
-                    return make(style, arr_type, source, tags)
-                else
-                    return make(style, scalar_type, source, tags)
-                end
-            end
+        if _isuniontype(T)
+            selected = _uniontype(style, T, source)
+            selected === nothing || return make(style, selected, source, tags)
         end
     end
     if T <: Tuple || dictlike(style, T) || arraylike(style, T) || noarg(style, T) || structlike(style, T)
@@ -904,12 +1136,16 @@ function make(style::StructStyle, T::Type, source, tags)
     end
 end
 
-function make(style::StructStyle, T::Type, source)
+function make(style::StructStyle, ::Type{T}, source) where {T}
     if abstractcollectionpassthrough(style, T, source)
         return source, defaultstate(style)
     end
     # start with some hard-coded Union cases
     if T !== Any
+        if _isuniontype(T)
+            selected = _specialuniontype(style, T, source)
+            selected === nothing || return make(style, selected, source)
+        end
         if T >: Missing && T !== Missing
             if nulllike(style, source)
                 return make(style, Missing, source)
@@ -923,49 +1159,29 @@ function make(style::StructStyle, T::Type, source)
                 return make(style, Base.nonnothingtype(T), source)
             end
         end
-        # for Union types like Union{T, Vector{T}} (after Nothing/Missing have been peeled),
-        # we can disambiguate by checking if source is arraylike;
-        # only applies when there's exactly one arraylike and one non-arraylike member
-        if T isa Union
-            types = Base.uniontypes(T)
-            arr_type = nothing
-            scalar_type = nothing
-            ambiguous = false
-            for t in types
-                if arraylike(style, t)
-                    # more than one arraylike type means we can't disambiguate
-                    if arr_type !== nothing
-                        ambiguous = true
-                        break
-                    end
-                    arr_type = t
-                else
-                    if scalar_type !== nothing
-                        ambiguous = true
-                        break
-                    end
-                    scalar_type = t
-                end
-            end
-            if !ambiguous && arr_type !== nothing && scalar_type !== nothing
-                if arraylike(style, source)
-                    return make(style, arr_type, source)
-                else
-                    return make(style, scalar_type, source)
-                end
-            end
+        if _isuniontype(T)
+            selected = _uniontype(style, T, source)
+            selected === nothing || return make(style, selected, source)
         end
     end
     if T <: Tuple
-        return maketuple(style, T, source)
+        return maketuple(style, T, _lowerrootsource(style, source))
     elseif dictlike(style, T)
-        return makedict(style, T, source)
+        lowered = _lowerrootsource(style, source)
+        if abstractcollectionpassthrough(style, T, lowered)
+            return lowered, defaultstate(style)
+        end
+        return makedict(style, T, lowered)
     elseif arraylike(style, T)
-        return makearray(style, T, source)
+        lowered = _lowerrootsource(style, source)
+        if abstractcollectionpassthrough(style, T, lowered)
+            return lowered, defaultstate(style)
+        end
+        return makearray(style, T, lowered)
     elseif noarg(style, T)
-        return makenoarg(style, T, source)
+        return makenoarg(style, T, _lowerrootsource(style, source))
     elseif structlike(style, T)
-        return makestruct(style, T, source)
+        return makestruct(style, T, _lowerrootsource(style, source))
     else
         return lift(style, T, source)
     end
@@ -977,16 +1193,28 @@ else
     mem(n) = Memory{Any}(undef, n)
 end
 
-macro _t(i)
-    esc(:(isassigned(vals, $i) ? @inbounds(vals[$i])::fieldtype(T, $i) : fielddefault(style, T, $i)::fieldtype(T, $i)))
+# The value for a field the source did not supply: its declared default, else the null
+# its type admits (`nothing` first, so `Union{Missing,Nothing,T}` matches `lift`), else an
+# error naming the field. The message holds no type, so it is safe under `juliac --trim`.
+@noinline _absentfield_error(name) =
+    throw(ArgumentError(string("field `", name, "` has no default and is absent from the source")))
+@inline function _absentfield(default, ::Type{FT}, name) where {FT}
+    default === nothing || return default
+    Nothing <: FT && return nothing
+    Missing <: FT && return missing
+    return _absentfield_error(name)
+end
+
+macro _t(i, name)
+    esc(:(isassigned(vals, $i) ? @inbounds(vals[$i])::fieldtype(T, $i) : _absentfield(fielddefault(style, T, $i), fieldtype(T, $i), $name)::fieldtype(T, $i)))
 end
 
 @generated function _tuple(::Type{T}, vals, style) where {T}
-    n = fieldcount(T)
-    ex = Expr(:block)
-    push!(ex.args, :(Base.@_inline_meta))
-    push!(ex.args, Expr(:tuple, [:(@_t($i)) for i = 1:n]...))
-    return ex
+    t = Expr(:tuple)
+    for i = 1:fieldcount(T)
+        push!(t.args, :(@_t($i, $(QuoteNode(fieldname(T, i))))))
+    end
+    return Expr(:block, :(Base.@_inline_meta), t)
 end
 
 struct TupleClosure{T,A,S}
@@ -1104,27 +1332,26 @@ function makearray(style, x::T, source) where {T}
     end
 end
 
+# NOTE for all @generated functions in this file: generator bodies avoid
+# comprehensions/generators that capture `T` — each such closure type is
+# specific to `Type{T}`, so running the generator would trigger fresh
+# inference of `collect(Generator{...})` for every target type (measured at
+# ~5-10ms per closure per type)
 @generated function fieldnamestrings(::Type{T}) where {T}
-    :($(Tuple(String(fieldname(T, i)) for i in 1:fieldcount(T))))
+    t = Expr(:tuple)
+    for i = 1:fieldcount(T)
+        push!(t.args, String(fieldname(T, i)))
+    end
+    return t
 end
 
 @generated function fieldnamesymbols(::Type{T}) where {T}
-    :($(Tuple(fieldname(T, i) for i in 1:fieldcount(T))))
+    t = Expr(:tuple)
+    for i = 1:fieldcount(T)
+        push!(t.args, QuoteNode(fieldname(T, i)))
+    end
+    return t
 end
-
-struct StructClosure{T,A,S,FS,FSS,FT}
-    vals::A # Memory{Any} for structs, T for mutable structs
-    style::S
-    fsyms::FS
-    fstrs::FSS
-    ftags::FT
-end
-
-StructClosure{T}(vals::A, style::S, fsyms::FS, fstrs::FSS) where {T,A,S,FS,FSS} =
-    StructClosure{T}(vals, style, fsyms, fstrs, _fieldtagtuple(style, T, fsyms))
-
-StructClosure{T}(vals::A, style::S, fsyms::FS, fstrs::FSS, ftags::FT) where {T,A,S,FS,FSS,FT} =
-    StructClosure{T,A,S,FS,FSS,FT}(vals, style, fsyms, fstrs, ftags)
 
 if VERSION < v"1.11"
     setval!(vals::Vector{Any}, x, i) = @inbounds vals[i] = x
@@ -1134,77 +1361,204 @@ end
 
 setval!(vals::T, x, i) where {T} = _setfield!(vals, i, x)
 
-function findfield(::Type{T}, k, v, f) where {T}
-    st = _foreach(T) do i
-        if typeof(k) == Symbol
-            fn = f.fsyms[i]
-            ftags = f.ftags[i]
-            field = get(ftags, :name, fn)
-            if keyeq(k, field) || keyeq(k, fn)
-                symval, symst = make(f.style, fieldtype(T, i), v, ftags)
-                setval!(f.vals, symval, i)
-                return EarlyReturn(_MatchedState(symst))
-            end
-        elseif typeof(k) == Int
-            if k == i
-                ftags = f.ftags[i]
-                intval, intst = make(f.style, fieldtype(T, i), v, ftags)
-                setval!(f.vals, intval, i)
-                return EarlyReturn(_MatchedState(intst))
-            end
-        else
-            fn = f.fsyms[i]
-            fstr = f.fstrs[i]
-            ftags = f.ftags[i]
-            field = get(ftags, :name, fstr)
-            if keyeq(k, field)
-                strval, strst = make(f.style, fieldtype(T, i), v, ftags)
-                setval!(f.vals, strval, i)
-                return EarlyReturn(_MatchedState(strst))
-            end
-        end
-    end
-    return st isa _MatchedState ? st.value : unknownfield(f.style, T, k, v)
+# Struct-shaped targets are filled by a FieldSink: a source key is matched to
+# a field index (see `cursorhit`/`matchscan` below), then the generated
+# `applyfield!` ladder dispatches the index to a `make` call on that field's
+# concrete type.
+
+struct NoFieldMetadata end
+
+struct FieldMetadata{FT}
+    tags::FT
 end
 
-(f::StructClosure{T,A,S,FS,FSS,FT})(k, v) where {T,A,S,FS,FSS,FT} = findfield(T, k, v, f)
+struct NoCursor end
 
-@inline makenoarg(style, ::Type{T}, source) where {T} = makenoarg(style, initialize(style, T, source), source)
+@inline fieldmetadata(tags::Tuple{Vararg{@NamedTuple{}}}) = NoFieldMetadata()
+@inline fieldmetadata(tags) = FieldMetadata(tags)
+
+@inline sinktag(::NoFieldMetadata, ::Int) = (;)
+@inline sinktag(metadata::FieldMetadata, i::Int) = @inbounds metadata.tags[i]
+
+@inline ignoredfield(tags::NamedTuple{names}) where {names} =
+    :ignore in names && tags.ignore
+
+"""
+    StructUtils.orderedfields(::StructStyle) -> Bool
+
+Return `true` only when a style consumes source keys in field order and its
+owned key type implements [`StructUtils.orderedfieldmatch`](@ref). This is an
+internal, experimental integration hook. The source integration must own the
+only key type for which `orderedfieldmatch` can return `true`; generic sources
+must keep declaration-order matching.
+"""
+orderedfields(::StructStyle) = false
+
+@inline fieldcursor(style, ::NoFieldMetadata) =
+    orderedfields(style) ? Ref(1) : NoCursor()
+@inline fieldcursor(style, ::FieldMetadata) = NoCursor()
+
+struct FieldSink{T,S,V,M,C}
+    vals::V           # Memory{Any} (immutable/NamedTuple targets) or the instance itself (noarg)
+    style::S
+    metadata::M       # empty marker or per-field tag NamedTuples, fetched once per `make`
+    cursor::C         # NoCursor, or source-owned ordered-key cursor storage
+end
+
+FieldSink{T}(vals::V, style::S, metadata::M, cursor::C) where {T,S,V,M,C} =
+    FieldSink{T,S,V,M,C}(vals, style, metadata, cursor)
+
+# Key matching is two-phase. Phase 1 (`cursorhit`) is an internal opt-in for
+# source-owned key types that can prove the next raw field-name match without
+# changing `keyeq` semantics. Generic sources skip it: a custom key may match
+# several fields and must always select the first one in declaration order.
+# Phase 2 (`matchscan`) is a per-type generated scan with field-name literals.
+@inline function matchone(k, ::NoFieldMetadata, i, fn, fstr)
+    _ = i
+    if typeof(k) == Symbol
+        return keyeq(k, fn)
+    else
+        return keyeq(k, fstr)
+    end
+end
+
+@inline function matchone(k, metadata::FieldMetadata, i, fn, fstr)
+    tags = sinktag(metadata, i)
+    if typeof(k) == Symbol
+        name = get(tags, :name, fn)
+        return keyeq(k, name) || keyeq(k, fn)
+    else
+        return keyeq(k, get(tags, :name, fstr))
+    end
+end
+
+"""
+    StructUtils.orderedfieldmatch(key, field::String) -> Bool
+
+Return `true` when an integration-owned source-key type proves an exact raw
+field-name match. This is an internal, experimental hook. Styles must also opt
+in through [`StructUtils.orderedfields`](@ref), and the generic fallback must
+remain `false`.
+"""
+@inline orderedfieldmatch(key, field::String) = false
+@inline cursorhit(k, ::NoCursor, metadata, fstrs) = 0
+@inline advancecursor!(::NoCursor, i::Int, n::Int) = nothing
+@inline advancecursor!(cursor::Base.RefValue{Int}, i::Int, n::Int) =
+    cursor[] = i == n ? 1 : i + 1
+
+function cursorhit(k, cursor::Base.RefValue{Int}, metadata, fstrs)
+    N = length(fstrs)
+    # Tagged names can overlap. Preserve first-field scan order by using the
+    # cursor only when every field has the default empty metadata.
+    metadata isa NoFieldMetadata || return 0
+    N == 0 && return 0
+    i = cursor[]
+    i > N && (i = 1)
+    if orderedfieldmatch(k, @inbounds(fstrs[i]))
+        cursor[] = i == N ? 1 : i + 1
+        return i
+    end
+    return 0
+end
+
+@generated function matchscan(::Type{T}, k, metadata) where {T}
+    ex = Expr(:block)
+    for i = 1:fieldcount(T)
+        fn = QuoteNode(fieldname(T, i))
+        fstr = String(fieldname(T, i))
+        push!(ex.args, :(matchone(k, metadata, $i, $fn, $fstr) && return $i))
+    end
+    push!(ex.args, :(return 0))
+    return ex
+end
+
+# Splice each field type as a literal. Normal `make` dispatch remains visible,
+# including exact custom methods; its default path uses the concrete Val token
+# above for Union targets.
+function _fieldmake(j::Int, @nospecialize(ft))
+    return :(make(f.style, $ft, v, sinktag(f.metadata, $j)))
+end
+
+@generated function applyfield!(f::FieldSink{T}, i::Int, v) where {T}
+    ex = Expr(:block)
+    for j = 1:fieldcount(T)
+        push!(ex.args, quote
+            if i == $j
+                ignoredfield(sinktag(f.metadata, $j)) && return defaultstate(f.style)
+                val, st = $(_fieldmake(j, fieldtype(T, j)))
+                setval!(f.vals, val, $j)
+                return st
+            end
+        end)
+    end
+    push!(ex.args, :(return defaultstate(f.style)))
+    return ex
+end
+
+function (f::FieldSink{T,S,V,M,C})(k, v) where {T,S,V,M,C}
+    N = fieldcount(T)
+    i = typeof(k) == Int ? ((1 <= k <= N) ? k : 0) :
+        cursorhit(k, f.cursor, f.metadata, fieldnamestrings(T))
+    if i == 0
+        typeof(k) == Int && return unknownfield(f.style, T, k, v)
+        i = matchscan(T, k, f.metadata)
+        i == 0 && return unknownfield(f.style, T, k, v)
+        advancecursor!(f.cursor, i, N)
+    end
+    return applyfield!(f, i, v)
+end
+
+# Build the sink for one make of `T` (tags fetched exactly once per make) and
+# run the source through it. Generic sources use an allocation-free NoCursor;
+# source integrations can provide private cursor storage for owned key types.
+function fillfields!(style::StructStyle, ::Type{T}, vals, source) where {T}
+    tags = _fieldtagtuple(style, T, fieldnamesymbols(T))
+    metadata = fieldmetadata(tags)
+    cursor = fieldcursor(style, metadata)
+    return applyeach(style, FieldSink{T}(vals, style, metadata, cursor), source)
+end
+
+makenoarg(style, ::Type{T}, source) where {T} = makenoarg(style, initialize(style, T, source), source)
 
 function makenoarg(style, y::T, source) where {T}
-    fsyms = fieldnamesymbols(T)
-    fstrs = fieldnamestrings(T)
-    st = applyeach(style, StructClosure{T}(y, style, fsyms, fstrs), source)
+    st = fillfields!(style, T, y, source)
     return y, st
 end
 
+@inline _missingfield(::StructStyle, T::Type, key, defs) = get(defs, key, nothing)
+
 macro _v(i)
-    esc(:(isassigned(vals, $i) ? @inbounds(vals[$i])::fieldtype(T, $i) : get(defs, @inbounds(fsyms[$i]), nothing)::fieldtype(T, $i)))
+    esc(:(
+        isassigned(vals, $i) ?
+        @inbounds(vals[$i])::fieldtype(T, $i) :
+        _absentfield(_missingfield(style, T, @inbounds(fsyms[$i]), defs), fieldtype(T, $i), @inbounds(fsyms[$i]))::fieldtype(T, $i)
+    ))
 end
 
 @generated function _construct(::Type{T}, vals, style, fsyms) where {T}
     n = fieldcount(T)
-    ex = Expr(:block)
-    push!(ex.args, :(Base.@_inline_meta))
     # fast path: all fields assigned, skip fielddefaults entirely
-    all_assigned = Expr(:&&, [:(isassigned(vals, $i)) for i = 1:n]...)
-    fast = Expr(:call, Any[:T, [:(@inbounds(vals[$i])::fieldtype(T, $i)) for i = 1:n]...]...)
-    slow = Expr(:block,
-        :(defs = fielddefaults(style, T, vals)),
-        Expr(:call, Any[:T, [:(@_v($i)) for i = 1:n]...]...))
-    push!(ex.args, Expr(:if, all_assigned, fast, slow))
-    return ex
+    all_assigned = n == 0 ? true : :(isassigned(vals, 1))
+    for i = 2:n
+        all_assigned = Expr(:&&, all_assigned, :(isassigned(vals, $i)))
+    end
+    fast = Expr(:call, :T)
+    slowcall = Expr(:call, :T)
+    for i = 1:n
+        push!(fast.args, :(@inbounds(vals[$i])::fieldtype(T, $i)))
+        push!(slowcall.args, :(@_v($i)))
+    end
+    slow = Expr(:block, :(defs = fielddefaults(style, T, vals)), slowcall)
+    return Expr(:block, :(Base.@_inline_meta), Expr(:if, all_assigned, fast, slow))
 end
 
 function makestruct(style, ::Type{T}, source) where {T}
     vals = mem(fieldcount(T))
-    fsyms = fieldnamesymbols(T)
-    fstrs = fieldnamestrings(T)
-    st = applyeach(style, StructClosure{T}(vals, style, fsyms, fstrs), source)
+    st = fillfields!(style, T, vals, source)
     if T <: NamedTuple
         return T(_tuple(T, vals, style)), st
     else
-        return _construct(T, vals, style, fsyms), st
+        return _construct(T, vals, style, fieldnamesymbols(T)), st
     end
 end
 
