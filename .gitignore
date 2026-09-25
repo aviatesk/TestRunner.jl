@@ -1,4 +1,4 @@
 .envrc
-vendor
+/vendor
 Manifest.toml
 *.bak
