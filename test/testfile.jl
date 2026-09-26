@@ -52,3 +52,12 @@ end
         @test nestedfunc2(3π/2) ≈ -1
     end
 end
+
+@testset "nested first" begin
+    @testset "nested first1" begin
+        @test test_func(0) ≈ 0
+    end
+    @testset "nested first2" begin
+        @test test_func(π/2) ≈ 1
+    end
+end
