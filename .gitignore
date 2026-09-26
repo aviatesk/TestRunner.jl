@@ -1,3 +1,5 @@
 .envrc
+/vendor
 Manifest.toml
-*.bak
+Manifest-v*.toml
+Project.toml.bak
