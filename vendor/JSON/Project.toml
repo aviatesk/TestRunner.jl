@@ -19,13 +19,19 @@ StructUtils = "c27443c7-5f73-531e-b2b6-c9c0ec3be2c0"
 PrecompileTools = "34277385-dbfe-5e9c-a5da-1fda53d5b4c9"
 
 [sources.StructUtils]
-path = "../StructUtils"
+subdir = "vendor/StructUtils"
+rev = "328d502122d773c18726abfb84a02ce55e8294f2"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.Parsers]
-path = "../Parsers"
+subdir = "vendor/Parsers"
+rev = "328d502122d773c18726abfb84a02ce55e8294f2"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.PrecompileTools]
-path = "../PrecompileTools"
+subdir = "vendor/PrecompileTools"
+rev = "328d502122d773c18726abfb84a02ce55e8294f2"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [targets]
 test = ["Arrow", "Pkg", "Tar", "Test"]
