@@ -106,9 +106,7 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 # Notes
 - All top-level code (except @test and @testset) is automatically executed
 - Only top-level code is interpreted; function calls within tests are compiled for performance
-- Matched code runs within its enclosing testsets without running their other tests, except
-  that matching the first statement of a testset body currently executes all tests in that
-  testset due to limitations in source provenance tracking
+- Matched code runs within its enclosing testsets without running their other tests
 - If an empty patterns collection is provided, only non-test top-level code will be executed
   (no `@test` or `@testset` expressions will run). This includes all function definitions,
   imports, and other setup code, including any `include` statements
@@ -282,6 +280,7 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
 
         if !isnothing(patterns) && is_test_expr
             # For @testset and @test, use pattern matching
+            expr = attribute_testset_to_call_site(expr::Expr)
             lines = Set{Int}()
             matched_lines!(lines, node, patterns, get(interp.filter_lines, interp.filename, nothing))
 
@@ -316,6 +315,23 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
             frame = JI.Frame(context, src)
             JI.finish!(interp, frame, #=istoplevel=#true)
         end
+    end
+end
+
+# `Test.@testset` attributes its whole expansion to the first `LineNumberNode` of the body
+# ("preserve outer location"), so the code of an enclosing testset (including its other
+# tests) shares the line of the first statement of the body. Prepend the line of the
+# `@testset` call itself so that the expansion is attributed to that line instead.
+function attribute_testset_to_call_site(ex::Expr)
+    return MacroTools.postwalk(ex) do @nospecialize x
+        if Meta.isexpr(x, :macrocall) && MacroTools.@capture(x, @testset(args__))
+            lnn = x.args[2]
+            body = x.args[end]
+            if lnn isa LineNumberNode && Meta.isexpr(body, :block)
+                x = Expr(:macrocall, x.args[1:end-1]..., Expr(:block, lnn, body.args...))
+            end
+        end
+        return x
     end
 end
 

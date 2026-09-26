@@ -47,6 +47,8 @@ end
 module ComplexRunnerModule end
 module Nested1RunnerModule end
 module Nested2RunnerModule end
+module NestedFirst1RunnerModule end
+module NestedFirst2RunnerModule end
 @testset "nested testsets" begin
     # Test that tests are recorded into the testsets enclosing them
     let result = @testset "complex runner" runtest(TESTFILE, ("complex",); topmodule=ComplexRunnerModule)
@@ -77,6 +79,25 @@ module Nested2RunnerModule end
         nested2 = only(complex.results)
         @test nested2.description == "nested2"
         @test nested2.n_passed == 2
+    end
+
+    # Test running a nested testset that is the first statement of the enclosing testset:
+    # `Test.@testset` attributes the code of the enclosing testset to the line of that
+    # statement, which must not select the other nested testsets
+    let result = @testset "nested first1 runner" runtest(TESTFILE, ("nested first1",); topmodule=NestedFirst1RunnerModule)
+        nested_first = only(result.results)
+        @test nested_first.description == "nested first"
+        @test nested_first.n_passed == 0
+        nested_first1 = only(nested_first.results)
+        @test nested_first1.description == "nested first1"
+        @test nested_first1.n_passed == 1
+    end
+    let result = @testset "nested first2 runner" runtest(TESTFILE, ("nested first2",); topmodule=NestedFirst2RunnerModule)
+        nested_first = only(result.results)
+        @test nested_first.n_passed == 0
+        nested_first2 = only(nested_first.results)
+        @test nested_first2.description == "nested first2"
+        @test nested_first2.n_passed == 1
     end
 end
 
