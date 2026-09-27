@@ -1,0 +1,75 @@
+      293 function allbindings(pat, bs)
+        0   if isa(pat, QuoteNode)
+        6     return allbindings(pat.value, bs)
+        -   end
+      206   return isbinding(pat) || (isslurp(pat) && pat !== :__) ? push!(bs, bname(pat)) :
+        -   isa(pat, TypeBind) ? push!(bs, pat.name) :
+      182   isa(pat, OrBind) ? (allbindings(pat.pat1, bs); allbindings(pat.pat2, bs)) :
+        -   istb(pat) ? push!(bs, tbname(pat)) :
+        -   isexpr(pat, :$) ? bs :
+      257   isa(pat, Expr) ? map(pat -> allbindings(pat, bs), [pat.head, pat.args...]) :
+        -   bs
+        - end
+        - 
+       98 allbindings(pat) = (bs = Any[]; allbindings(pat, bs); bs)
+        - 
+       29 function bindinglet(bs, body)
+       29   ex = :(let $(esc(:env)) = env, $((:($(esc(b)) = get(env, $(Expr(:quote, b)), nothing)) for b in bs)...)
+        -            $body
+        -          end)
+       29   return ex
+        - end
+        - 
+       29 function makeclause(pat, yes, els = nothing)
+       29   bs = allbindings(pat)
+       50   pat = subtb(subor(pat))
+       29   quote
+        -     env = trymatch($(Expr(:quote, pat)), ex)
+        -     if env !== nothing
+        -       $(bindinglet(bs, esc(yes)))
+        -     else
+        -       $els
+        -     end
+        -   end
+        - end
+        - 
+        5 function clauses(ex)
+        0   line = nothing
+        5   clauses = []
+        5   for l in ex.args
+      145     isline(l) && (line = l; continue)
+       29     env = trymatch(:(pat_ => yes_), l)
+       29     env === nothing && error("Invalid match clause $l")
+       29     pat, yes = env[:pat], env[:yes]
+       29     push!(clauses, (pat, :($line;$yes)))
+       58   end
+        5   return clauses
+        - end
+        - 
+        5 macro match(ex, lines)
+        5   @assert isexpr(lines, :block)
+        5   result = quote
+        -     ex = $(esc(ex))
+        -   end
+        - 
+       34   body = foldr((clause, body) -> makeclause(clause..., body),
+        -                clauses(lines); init=nothing)
+        - 
+        5   push!(result.args, body)
+        5   return result
+        - end
+        - 
+       20 macro capture(ex, pat)
+       20   bs = allbindings(pat)
+       20   pat = subtb(subor(pat))
+       20   quote
+        -     $([:($(esc(b)) = nothing) for b in bs]...)
+        -     env = trymatch($(esc(Expr(:quote, pat))), $(esc(ex)))
+        -     if env === nothing
+        -       false
+        -     else
+        -       $([:($(esc(b)) = get(env, $(esc(Expr(:quote, b))), nothing)) for b in bs]...)
+        -       true
+        -     end
+        -   end
+        - end

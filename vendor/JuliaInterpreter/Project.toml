@@ -27,7 +27,7 @@ InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 
 [sources.CodeTracking]
 subdir = "vendor/CodeTracking"
-rev = "328d502122d773c18726abfb84a02ce55e8294f2"
+rev = "4c9a099ee1cc84c670a9d2846da14802981af98b"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [targets]
