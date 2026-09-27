@@ -74,6 +74,8 @@ julia --startup-file=no --project=. scripts/vendor-deps.jl --source-branch=maste
 
 # Step 3: Commit vendor/ directory
 echo "==> Step 3: Committing vendor/ directory"
+# New packages under /vendor are ignored and need to be staged explicitly.
+git add -f -A vendor/
 git add -A
 git commit -m "vendor: update vendored dependencies"
 if [[ "$LOCAL_MODE" == true ]]; then
