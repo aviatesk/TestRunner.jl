@@ -18,17 +18,17 @@ StructTypes = "0b725bc3-3246-5ee8-97e4-90ce5abd8732"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
-CodeTracking = {path = "vendor/CodeTracking"}
-Compiler = {path = "vendor/Compiler"}
-JSON3 = {path = "vendor/JSON3"}
-JuliaInterpreter = {path = "vendor/JuliaInterpreter"}
-JuliaSyntax = {path = "vendor/JuliaSyntax"}
-LoweredCodeUtils = {path = "vendor/LoweredCodeUtils"}
-MacroTools = {path = "vendor/MacroTools"}
-Parsers = {path = "vendor/Parsers"}
-PrecompileTools = {path = "vendor/PrecompileTools"}
-Preferences = {path = "vendor/Preferences"}
-StructTypes = {path = "vendor/StructTypes"}
+CodeTracking = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/CodeTracking", url = "https://github.com/aviatesk/TestRunner.jl"}
+Compiler = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/Compiler", url = "https://github.com/aviatesk/TestRunner.jl"}
+JSON3 = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/JSON3", url = "https://github.com/aviatesk/TestRunner.jl"}
+JuliaInterpreter = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/JuliaInterpreter", url = "https://github.com/aviatesk/TestRunner.jl"}
+JuliaSyntax = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/JuliaSyntax", url = "https://github.com/aviatesk/TestRunner.jl"}
+LoweredCodeUtils = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/LoweredCodeUtils", url = "https://github.com/aviatesk/TestRunner.jl"}
+MacroTools = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/MacroTools", url = "https://github.com/aviatesk/TestRunner.jl"}
+Parsers = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/Parsers", url = "https://github.com/aviatesk/TestRunner.jl"}
+PrecompileTools = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/PrecompileTools", url = "https://github.com/aviatesk/TestRunner.jl"}
+Preferences = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/Preferences", url = "https://github.com/aviatesk/TestRunner.jl"}
+StructTypes = {rev = "4c9a099ee1cc84c670a9d2846da14802981af98b", subdir = "vendor/StructTypes", url = "https://github.com/aviatesk/TestRunner.jl"}
 
 [compat]
 Compiler = "0.1"
