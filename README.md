@@ -189,8 +189,11 @@ testrunner mypkg/runtests.jl.jl "my tests" --filter-lines=10,15,20:25
 # Use verbose output
 testrunner -v mypkg/runtests.jl.jl L55:57
 
+# Pass options to Julia before `--`, e.g. to run tests with multiple threads
+testrunner --threads=4 -- mypkg/runtests.jl "my tests"
+
 # Use a specific project environment
-testrunner --project=/path/to/project mypkg/runtests.jl.jl "my tests"
+testrunner --project=/path/to/project -- mypkg/runtests.jl "my tests"
 
 # Show help
 testrunner --help
@@ -211,7 +214,8 @@ Pattern formats:
 - `"my tests"` - Match testset by exact name (default)
 
 Options:
-- `--project[=<dir>]` - Set project/environment (same format and meaning as Julia's `--project` flag)
+- `--project[=<dir>]` - **Deprecated**: pass `--project` to Julia before `--`
+  instead, e.g. `testrunner --project=test -- test/runtests.jl`
 - `--filter-lines=1,5,10:20` or `-f=1,5,10:20` - Filter to specific lines
 - `--verbose` or `-v` - Show verbose output
 - `--json` - Output results in JSON format for machine-readable test results.

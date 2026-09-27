@@ -24,6 +24,11 @@ function error_print(msg::AbstractString, highlight::AbstractString)
     println(stderr)
 end
 
+function warning_print(msg::AbstractString)
+    printstyled(stderr, "Warning:", bold=true, color=:yellow)
+    println(stderr, " $msg")
+end
+
 function info_print(msg::AbstractString)
     printstyled("Info:", bold=true, color=:blue)
     println(" $msg")
@@ -120,6 +125,12 @@ function (@main)(args::Vector{String})
         i += 1
     end
 
+    if project !== nothing
+        warning_print("The `--project` option of testrunner is deprecated. " *
+            "Pass `--project` to Julia before `--` instead, " *
+            "e.g. `testrunner --project=test -- test/runtests.jl`")
+    end
+
     # Check if filename was provided
     if filename === nothing
         error_print("No file path provided")
@@ -147,6 +158,10 @@ function print_usage()
 
     Usage:
       testrunner [options] <path> [patterns...]
+      testrunner [julia options] -- [options] <path> [patterns...]
+
+    Julia options such as `--project` go before `--`, e.g.:
+      testrunner --project=test -- test/runtests.jl
 
     Pattern formats:
       L10         - Run tests on line 10
@@ -156,7 +171,7 @@ function print_usage()
       "my tests"  - Match testset by exact name (default)
 
     Options:
-      --project[=<dir>]         Set project/environment (same as Julia's --project)
+      --project[=<dir>]         Deprecated: pass `--project` to Julia before `--`
       --filter-lines=1,5,10:20  Filter to specific lines
       -f=1,5,10:20              Short form of --filter-lines
       --verbose, -v             Show verbose output
@@ -178,8 +193,8 @@ function print_usage()
       testrunner test/runtests.jl L15:25
       testrunner test/runtests.jl ':(@test length(xs) == 1)'
       testrunner test/runtests.jl r"^test.*" --filter-lines=10:50
-      testrunner test/runtests.jl --project=@. "my tests"
-      testrunner test/runtests.jl --project=/path/to/project L10:20
+      testrunner --project=test -- test/runtests.jl "my tests"
+      testrunner --project=/path/to/project -- test/runtests.jl L10:20
       testrunner test/runtests.jl --json
     """)
 end
@@ -409,7 +424,7 @@ function runtest_internal(filename::String, patterns::Vector{Any}, filter_lines,
             info_print("Active environment:", project)
             detail_print("Project path: $project_path")
         end
-        pushfirst!(LOAD_PATH, project_path)
+        Base.set_active_project(project_path)
     end
 
     bname = basename(filename)
