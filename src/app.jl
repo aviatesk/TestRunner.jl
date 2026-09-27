@@ -3,7 +3,7 @@ module TestRunnerApp
 # Import necessary modules
 using Test: Test
 using ..TestRunner: JS, TestRunnerTestSet, errors_and_fails, last_toplevel_testset, runtest
-using JSON: JSON
+using JSON3: JSON3
 
 include("testrunner-types.jl")
 include("testset-results.jl")
@@ -521,7 +521,7 @@ function runtest_json(
             logs,
             diagnostics,
             testsets)
-        JSON.json(stdout, result)
+        JSON3.write(stdout, result)
     end
 end
 
