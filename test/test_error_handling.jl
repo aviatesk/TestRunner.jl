@@ -123,8 +123,29 @@ module ExceptionTest4 end
     results11 = only(results1.results)
     @test results11 isa Test.Error
     @test results11.test_type === :test_error
-    @test_broken occursin("DomainError with Inf", sprint(show, results11))
-    @test_broken occursin(SIN_DOMAIN_ERROR, results11.backtrace)
+    @test occursin("DomainError with Inf", sprint(show, results11))
+    @test occursin(SIN_DOMAIN_ERROR, results11.backtrace)
+end
+
+module ParseErrorTest end
+@testset "Errors outside of the interpreter" TestRunner.TestRunnerMetaTestSet begin
+    testfile = joinpath(@__DIR__, "testfile_syntax_error.jl")
+    result = try
+        @testset TestRunnerTestSet "Parse error testset" runtest(testfile, ["syntax error test"]; topmodule=ParseErrorTest)
+    catch e
+        e
+    end
+    @test result isa Test.DefaultTestSet # testset for `TestRunnerTestSet`
+    counts = Test.get_test_counts(result)
+    @test counts.errors == 1
+    @test counts.broken == counts.passes == counts.fails == 0
+    @test length(result.results) == 1
+    results1 = only(result.results)
+    @test results1 isa Test.Error
+    @test results1.test_type === :nontest_error
+    # the interpreter has not recorded any exception, so the original backtrace is kept
+    @test occursin("ParseError", results1.backtrace)
+    @test occursin("ParseError", sprint(show, results1))
 end
 
 end # module test_error_handling
