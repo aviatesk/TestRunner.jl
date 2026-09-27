@@ -1,0 +1,29 @@
+        - struct TypeBind
+        -   name::Symbol
+        -   ts::Set{Any}
+        - end
+        - 
+        - istb(s) = false
+      247 istb(s::Symbol) = !(endswith(string(s), "_") ||
+        -                     endswith(string(s), "_str")) &&
+        -                     occursin("_", string(s))
+        - 
+        3 tbname(s::Symbol) = Symbol(split(string(s), "_")[1])
+        - tbname(s::TypeBind) = s.name
+        - 
+        3 totype(s::Symbol) = string(s)[1] in 'A':'Z' ? s : Expr(:quote, s)
+        - 
+      146 function tbnew(s::Symbol)
+      289   istb(s) || return s
+        3   ts = map(Symbol, split(string(s), "_"))
+        3   name = popfirst!(ts)
+        3   ts = (totype(t) for t in ts)
+        3   Expr(:$, :($TypeBind($(Expr(:quote, name)), Set{Any}([$(ts...)]))))
+        - end
+        - 
+        - match_inner(b::TypeBind, ex, env) =
+        -   isexpr(ex, b.ts...) ? (env[tbname(b)] = ex; env) : @nomatch(b, ex)
+        - 
+        4 subtb(s) = s
+      146 subtb(s::Symbol) = tbnew(s)
+       80 subtb(s::Expr) = isexpr(s, :line) ? s : Expr(subtb(s.head), map(subtb, s.args)...)

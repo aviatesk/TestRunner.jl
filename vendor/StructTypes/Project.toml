@@ -1,0 +1,17 @@
+version = "1.11.0"
+name = "StructTypes"
+authors = ["Jacob Quinn"]
+uuid = "0b725bc3-3246-5ee8-97e4-90ce5abd8732"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+[targets]
+test = ["Test"]
+
+[compat]
+julia = "1.6"
