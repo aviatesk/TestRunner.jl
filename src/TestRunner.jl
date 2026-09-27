@@ -255,8 +255,10 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
         lnn = LineNumberNode(JS.source_line(node), interp.filename)
 
         if JS.kind(node) == JS.K"module"
-            @assert JS.numchildren(node) == 2 "malformed `module` AST"
-            ModuleName, newsntop = JS.children(node)
+            # Julia 1.14+ prepends a `VERSION` child that records the parser version
+            n = JS.numchildren(node)
+            @assert n == 2 || n == 3 "malformed `module` AST"
+            ModuleName, newsntop = node[n-1], node[n]
             isbare = JS.has_flags(node, JS.BARE_MODULE_FLAG)
             newcontext = Core.eval(context, Expr(:module, !isbare, Expr(ModuleName), Expr(:block, lnn)))
             newinterp = TRInterpreter(interp; context=newcontext)
@@ -701,7 +703,7 @@ function scrub_exc_stack(excs::Vector{ExceptionFrame})
 end
 
 include("app.jl")
-using .TestRunnerApp: app_runner_module, main
+using .App: app_runner_module, main
 
 include("precompile.jl")
 

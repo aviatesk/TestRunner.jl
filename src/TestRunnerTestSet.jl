@@ -22,9 +22,11 @@ function Test.record(trts::TestRunnerTestSet, @nospecialize res)
         errors_and_fails[res] = excs
         empty!(interp.current_exceptions)
     elseif res isa Test.Error
-        (; test_type, orig_expr, value, #=backtrace,=# source) = res
         excs = copy(interp.current_exceptions)
-        res = Test.Error(test_type, orig_expr, WrappedString(value), Base.ExceptionStack(excs), source)
+        if !isempty(excs)
+            (; test_type, orig_expr, value, #=backtrace,=# source) = res
+            res = Test.Error(test_type, orig_expr, WrappedString(value), Base.ExceptionStack(excs), source)
+        end
         errors_and_fails[res] = excs
         empty!(interp.current_exceptions)
     end

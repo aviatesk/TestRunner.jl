@@ -3,7 +3,7 @@ module test_json_output
 using Test
 using JSON3: JSON3
 using TestRunner
-using TestRunner.TestRunnerApp: TestRunnerResult
+using TestRunner.App: TestRunnerResult
 
 function with_simple_passing_test_file(tester)
     content = """
@@ -406,6 +406,28 @@ end
         @test result.exitcode == 0
         json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1
+    end
+end
+
+@testset "deprecated `--project`" begin
+    mktempdir() do dir
+        project_file = joinpath(dir, "Project.toml")
+        write(project_file, "")
+        testfile = joinpath(dir, "runtests.jl")
+        write(testfile, """
+        using Test
+        @testset "active project" begin
+            @test Base.active_project() == $(repr(project_file))
+        end
+        """)
+        # `@.` is resolved from the test file rather than from the current directory
+        for project in (dir, "@.")
+            result = run_testrunner_process(["--json", "--project=$project", testfile, "active project"])
+            @test result.exitcode == 0
+            @test occursin("`--project` option of testrunner is deprecated", result.stderr)
+            json_result = JSON3.read(result.stdout, TestRunnerResult)
+            @test json_result.stats.n_passed == 1
+        end
     end
 end
 
