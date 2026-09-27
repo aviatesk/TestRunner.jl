@@ -1,7 +1,7 @@
 module test_json_output
 
 using Test
-using JSON: JSON
+using JSON3: JSON3
 using TestRunner
 using TestRunner.TestRunnerApp: TestRunnerResult
 
@@ -64,7 +64,7 @@ with_simple_passing_test_file() do testfile
     result = run_testrunner_process(["--json", testfile])
     @test result.exitcode == 0
     @test isempty(result.stderr)
-    json_result = JSON.parse(result.stdout, TestRunnerResult)
+    json_result = JSON3.read(result.stdout, TestRunnerResult)
     stats = json_result.stats
     @test stats.n_passed == 1
     @test stats.n_failed == stats.n_errored == stats.n_broken == 0
@@ -92,7 +92,7 @@ with_simple_passing_test_file() do testfile
     result = run_testrunner_process(["--json", testfile, "simple test"])
     @test result.exitcode == 0
     @test isempty(result.stderr)
-    json_result = JSON.parse(result.stdout, TestRunnerResult)
+    json_result = JSON3.read(result.stdout, TestRunnerResult)
     @test json_result.patterns == ["simple test"]
     stats = json_result.stats
     @test stats.n_passed == 1
@@ -103,7 +103,7 @@ end
 
 with_simple_passing_test_file() do testfile
     result = run_testrunner_process(["--json", "--verbose", testfile])
-    json_result = JSON.parse(result.stdout, TestRunnerResult)
+    json_result = JSON3.read(result.stdout, TestRunnerResult)
     @test occursin("Test Setup", json_result.logs)
     @test occursin("Julia version", json_result.logs)
     @test occursin("Test Configuration", json_result.logs)
@@ -114,7 +114,7 @@ with_failing_test_file() do testfile
     result = run_testrunner_process(["--json", testfile])
     @test result.exitcode == 1
     @test isempty(result.stderr)
-    json_result = JSON.parse(result.stdout, TestRunnerResult)
+    json_result = JSON3.read(result.stdout, TestRunnerResult)
     stats = json_result.stats
     @test stats.n_failed == 1
     @test stats.n_passed == stats.n_errored == stats.n_broken == 0
@@ -151,7 +151,7 @@ end
     with_test_file(content) do testfile
         result = run_testrunner_process(["--json", testfile, "outer"])
         @test result.exitcode == 1
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         outer = only(json_result.testsets)
         @test outer.description == "outer"
         @test outer.line == 3
@@ -171,7 +171,7 @@ end
     # Running a nested test set also reports its enclosing test sets
     with_test_file(content) do testfile
         result = run_testrunner_process(["--json", testfile, "inner"])
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         outer = only(json_result.testsets)
         @test outer.line == 3
         inner = only(outer.children)
@@ -181,7 +181,7 @@ end
     # Without patterns, the file is run via `include` and test sets are not reported
     with_test_file(content) do testfile
         result = run_testrunner_process(["--json", testfile])
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 4
         @test json_result.testsets === nothing
     end
@@ -206,7 +206,7 @@ end
         with_test_file(content) do testfile
             result = run_testrunner_process(["--json", testfile, "nested"])
             @test result.exitcode == 0
-            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            json_result = JSON3.read(result.stdout, TestRunnerResult)
             wrapped = only(json_result.testsets)
             @test wrapped.description == "wrapped"
             @test wrapped.line == 11
@@ -230,7 +230,7 @@ end
         with_test_file(content) do testfile
             result = run_testrunner_process(["--json", testfile, "L3:8"])
             @test result.exitcode == 0
-            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            json_result = JSON3.read(result.stdout, TestRunnerResult)
             case1, case2, casex = json_result.testsets
             @test case1.description == "case 1" && case1.line == 3
             @test case2.description == "case 2" && case2.line == 3
@@ -238,7 +238,7 @@ end
         end
         with_test_file(content) do testfile
             result = run_testrunner_process(["--json", testfile, "case X"])
-            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            json_result = JSON3.read(result.stdout, TestRunnerResult)
             casex = only(json_result.testsets)
             @test casex.description == "case X"
             @test casex.line == 6
@@ -259,7 +259,7 @@ end
                                             stdin_input=source)
             @test result.exitcode == 0
             @test isempty(result.stderr)
-            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            json_result = JSON3.read(result.stdout, TestRunnerResult)
             stats = json_result.stats
             @test stats.n_passed == 1
             @test stats.n_failed == stats.n_errored == stats.n_broken == 0
@@ -277,7 +277,7 @@ end
         result = run_testrunner_process(["--json", "--read-stdin", testfile, "stdin only"];
                                         stdin_input=source)
         @test result.exitcode == 0
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1
     end
 
@@ -292,7 +292,7 @@ end
         result = run_testrunner_process(["--json", "--read-stdin", nonexistent];
                                         stdin_input=source)
         @test result.exitcode == 0
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1
     end
 
@@ -311,7 +311,7 @@ end
             ["--json", "--read-stdin", testfile, "second", "--filter-lines=5"];
             stdin_input=source)
         @test result.exitcode == 0
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1
     end
 
@@ -330,7 +330,7 @@ end
             ["--json", "--read-stdin", virtual_name];
             stdin_input=source)
         @test result.exitcode == 1
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.filename == virtual_name
         @test !isempty(json_result.diagnostics)
         @test all(diag -> diag.filename == virtual_name, json_result.diagnostics)
@@ -358,7 +358,7 @@ end
                 stdin_input=source)
             @test result.exitcode == 0
             @test isempty(result.stderr)
-            json_result = JSON.parse(result.stdout, TestRunnerResult)
+            json_result = JSON3.read(result.stdout, TestRunnerResult)
             @test json_result.stats.n_passed == 1
             @test isempty(json_result.diagnostics)
         end
@@ -404,7 +404,7 @@ end
         result = run_testrunner_process(
             ["--json", "--root-path=$decoy_dir", entry_path, "real dir"])
         @test result.exitcode == 0
-        json_result = JSON.parse(result.stdout, TestRunnerResult)
+        json_result = JSON3.read(result.stdout, TestRunnerResult)
         @test json_result.stats.n_passed == 1
     end
 end
