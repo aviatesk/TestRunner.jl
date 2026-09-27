@@ -18,17 +18,17 @@ PrecompileTools = "34277385-dbfe-5e9c-a5da-1fda53d5b4c9"
 
 [sources.StructTypes]
 subdir = "vendor/StructTypes"
-rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
+rev = "98119c08a8996dc2487f8c4565e80e57f77f9cf3"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.Parsers]
 subdir = "vendor/Parsers"
-rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
+rev = "98119c08a8996dc2487f8c4565e80e57f77f9cf3"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.PrecompileTools]
 subdir = "vendor/PrecompileTools"
-rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
+rev = "98119c08a8996dc2487f8c4565e80e57f77f9cf3"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [targets]
