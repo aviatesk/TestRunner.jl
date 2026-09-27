@@ -3,7 +3,7 @@ module test_json_output
 using Test
 using JSON3: JSON3
 using TestRunner
-using TestRunner.TestRunnerApp: TestRunnerResult
+using TestRunner.App: TestRunnerResult
 
 function with_simple_passing_test_file(tester)
     content = """

@@ -1,4 +1,4 @@
-module TestRunnerApp
+module App
 
 # Import necessary modules
 using Test: Test
@@ -557,4 +557,4 @@ function runtest_app(
     end
 end
 
-end # module TestRunnerApp
+end # module App

@@ -701,7 +701,7 @@ function scrub_exc_stack(excs::Vector{ExceptionFrame})
 end
 
 include("app.jl")
-using .TestRunnerApp: app_runner_module, main
+using .App: app_runner_module, main
 
 include("precompile.jl")
 
