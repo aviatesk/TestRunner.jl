@@ -10,17 +10,17 @@ JuliaInterpreter = "a82ab8a0-b04b-500c-ae1d-6b4e87c3563c"
 
 [sources.Compiler]
 subdir = "vendor/Compiler"
-rev = "4c9a099ee1cc84c670a9d2846da14802981af98b"
+rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.CodeTracking]
 subdir = "vendor/CodeTracking"
-rev = "4c9a099ee1cc84c670a9d2846da14802981af98b"
+rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.JuliaInterpreter]
 subdir = "vendor/JuliaInterpreter"
-rev = "4c9a099ee1cc84c670a9d2846da14802981af98b"
+rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [compat]

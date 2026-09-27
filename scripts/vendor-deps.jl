@@ -56,6 +56,19 @@ function generate_new_uuid(original_uuid::UUID)
     return uuid5(original_uuid, VENDOR_NAMESPACE)
 end
 
+function remove_stale_vendor_packages!(vendor_dir::AbstractString,
+                                       packages::Vector{Pair{String,UUID}})
+    isdir(vendor_dir) || return
+    package_names = Set(first.(packages))
+    for name in readdir(vendor_dir)
+        path = joinpath(vendor_dir, name)
+        isfile(joinpath(path, "Project.toml")) || continue
+        name in package_names && continue
+        @info "Removing stale vendor package: $path"
+        rm(path; recursive=true)
+    end
+end
+
 function copy_package_source(mod::Module, pkg_name::AbstractString)
     src_dir = pkgdir(mod)
     src_dir === nothing && error("Could not find source directory for $pkg_name")
@@ -482,6 +495,7 @@ function vendor_loaded_packages(use_local_path::Bool, rev::Union{String,Nothing}
         println("  $name => $uuid")
     end
 
+    remove_stale_vendor_packages!(VENDOR_DIR, packages)
     mkpath(VENDOR_DIR)
 
     uuid_mapping = Dict{UUID,UUID}()

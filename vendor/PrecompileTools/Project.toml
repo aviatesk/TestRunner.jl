@@ -14,7 +14,7 @@ Preferences = "a85d3927-2675-5020-995e-8e17f64c82bb"
 
 [sources.Preferences]
 subdir = "vendor/Preferences"
-rev = "4c9a099ee1cc84c670a9d2846da14802981af98b"
+rev = "b4ad47b3c8df3e4d93c6a6c2d46dde8e3c9ecc37"
 url = "https://github.com/aviatesk/TestRunner.jl"
 
 [targets]
