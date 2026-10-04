@@ -17,19 +17,13 @@ Parsers = "e996d0cc-5495-5f06-b9fe-87f07f942bbe"
 PrecompileTools = "34277385-dbfe-5e9c-a5da-1fda53d5b4c9"
 
 [sources.StructTypes]
-subdir = "vendor/StructTypes"
-rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../StructTypes"
 
 [sources.Parsers]
-subdir = "vendor/Parsers"
-rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../Parsers"
 
 [sources.PrecompileTools]
-subdir = "vendor/PrecompileTools"
-rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
-url = "https://github.com/aviatesk/TestRunner.jl"
+path = "../PrecompileTools"
 
 [targets]
 test = ["Arrow", "Test"]
