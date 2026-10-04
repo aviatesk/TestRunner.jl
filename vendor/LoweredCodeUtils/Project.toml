@@ -9,13 +9,19 @@ CodeTracking = "84636303-58db-50e9-b60a-55781930faa2"
 JuliaInterpreter = "a82ab8a0-b04b-500c-ae1d-6b4e87c3563c"
 
 [sources.Compiler]
-path = "../Compiler"
+subdir = "vendor/Compiler"
+rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.CodeTracking]
-path = "../CodeTracking"
+subdir = "vendor/CodeTracking"
+rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [sources.JuliaInterpreter]
-path = "../JuliaInterpreter"
+subdir = "vendor/JuliaInterpreter"
+rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [compat]
 Compiler = "0.1"

@@ -13,7 +13,9 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 Preferences = "a85d3927-2675-5020-995e-8e17f64c82bb"
 
 [sources.Preferences]
-path = "../Preferences"
+subdir = "vendor/Preferences"
+rev = "e1c890bf6a76f885728926ae6c99f91ec2101faf"
+url = "https://github.com/aviatesk/TestRunner.jl"
 
 [targets]
 test = ["InteractiveUtils", "Pkg", "Test", "UUIDs"]
