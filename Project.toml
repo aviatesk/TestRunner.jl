@@ -16,7 +16,7 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 [compat]
 Compiler = "0.1"
 JSON3 = "1.14.3"
-JuliaInterpreter = "0.11"
+JuliaInterpreter = "0.11, 0.12"
 JuliaSyntax = "1, 2"
 LoweredCodeUtils = "3.8"
 MacroTools = "0.5.16"
