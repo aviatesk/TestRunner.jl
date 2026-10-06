@@ -521,6 +521,11 @@ execute test code:
 4. Conservative Dependency Execution: Executes _all_ top-level code except
    `@test` and `@testset` expressions to ensure tests don't fail due to
    missing dependencies
+5. Recursive Inclusion: Files included by matched code, e.g. by
+   `@testset "name" include("file.jl")`, are executed entirely. Files
+   included by the other executed code, including `include` calls directly in
+   the testsets enclosing matched code, only have their non-test top-level
+   code executed, like the conservative dependency execution above
 
 The key insight is that in reasonably-organized test code, the conservative
 dependency execution would only run the function and type definitions necessary
@@ -664,10 +669,9 @@ unrelated tests while still ensuring all code dependencies are available.
    executed natively as a whole. `mapexpr` takes each top-level expression as
    a whole, including `module` expressions whose contents TestRunner would
    otherwise execute one by one, so they cannot be executed selectively.
-   As a result, patterns given to `runtests` for such files are ignored.
-   Files without their own patterns, e.g. any file included when using
-   `runtest` or the app, are executed entirely anyway, so this makes no
-   difference there.
+   As a result, the tests in such files are executed even when the `include`
+   call is not matched, and patterns given to `runtests` for such files are
+   ignored.
 
 ## Development
 

@@ -263,6 +263,92 @@ let testfile = joinpath(@__DIR__, "testfile_include_mapexpr.jl")
     @test all(ts -> ts.n_passed == 1, included)
 end
 
+module IncludeSelectionModule1 end
+module IncludeSelectionModule2 end
+module IncludeSelectionModule3 end
+module IncludeSelectionModule4 end
+module IncludeSelectionModule5 end
+module IncludeSelectionModule6 end
+@testset "included files execute tests only when included by matched code" begin
+    testfile = joinpath(@__DIR__, "testfile_include_selection.jl")
+    descriptions(ts) = [r.description for r in ts.results if r isa Test.DefaultTestSet]
+
+    let result = @testset "bare include" runtest(testfile, ["after bare include"]; topmodule=IncludeSelectionModule1)
+        @test descriptions(result) == ["after bare include"]
+        @test only(result.results).n_passed == 1
+    end
+    let result = @testset "no patterns" runtest(testfile, []; topmodule=IncludeSelectionModule2)
+        @test isempty(result.results)
+    end
+    let result = @testset "include in matched testset" runtest(testfile, ["include in testset"]; topmodule=IncludeSelectionModule3)
+        @test descriptions(only(result.results)) == ["included tests 1", "included tests 2"]
+    end
+    let result = @testset "matched bare include" runtest(testfile, [:(include("_testfile_include_selection1.jl"))]; filter_lines=[3], topmodule=IncludeSelectionModule4)
+        @test descriptions(result) == ["included tests 1"]
+    end
+    # `include` calls in the enclosing testsets are executed, but not those in the other ones
+    let result = @testset "include in enclosing testset" runtest(testfile, ["inner"]; topmodule=IncludeSelectionModule5)
+        outer = only(result.results)
+        @test descriptions(outer) == ["inner"]
+        @test only(outer.results).n_passed == 1
+    end
+    let result = @testset "include as dependency" runtest(testfile, ["uses value"]; topmodule=IncludeSelectionModule6)
+        dependency = only(result.results)
+        @test descriptions(dependency) == ["uses value"]
+        @test only(dependency.results).n_passed == 1
+    end
+end
+
+module GlobalIncludeLineModule end
+module GlobalIncludeExprModule end
+module GlobalIncludeUnmatchedModule end
+@testset "include in a global assignment" begin
+    source = """
+    using Test
+    global declared
+    global value = include("_testfile_include_selection2.jl")
+    """
+    filename = joinpath(@__DIR__, "global-include.jl")
+    for (patterns, topmodule, expected) in (
+        ([3], GlobalIncludeLineModule, 2),
+        ([:(include("_testfile_include_selection2.jl"))], GlobalIncludeExprModule, 2),
+        ([], GlobalIncludeUnmatchedModule, 0))
+        result = @testset "global include" runtest(filename, patterns; source, topmodule)
+        @test length(result.results) == expected
+        @test all(ts -> ts.n_passed == 1, result.results)
+        @test (@invokelatest getglobal(topmodule, :value)) == 2
+    end
+end
+
+module QualifiedIncludeModule end
+module NestedQualifiedIncludeModule end
+@testset "qualified include in an enclosing testset" begin
+    for (qualifier, topmodule) in (("Base", QualifiedIncludeModule),
+                                   ("Main.Base", NestedQualifiedIncludeModule))
+        source = """
+        using Test
+        holder = (; include = error)
+        @testset "outer" begin
+            holder.include("non-module property must not be selected")
+            $qualifier.include(@__MODULE__, "_testfile_include_selection2.jl")
+            @testset "sibling" begin
+                $qualifier.include(@__MODULE__, "missing.jl")
+            end
+            @testset "inner" begin
+                @test value2() == 2
+            end
+        end
+        """
+        filename = joinpath(@__DIR__, "qualified-include.jl")
+        result = @testset "qualified include" runtest(filename, ["inner"]; source, topmodule)
+        outer = only(result.results)
+        @test outer.description == "outer"
+        inner = only(outer.results)
+        @test inner.description == "inner"
+        @test inner.n_passed == 1
+    end
+end
+
 module RunTestsModule1 end
 module RunTestsModule2 end
 module RunTestsModule3 end
