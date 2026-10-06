@@ -109,7 +109,8 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 - Matched code runs within its enclosing testsets without running their other tests
 - If an empty patterns collection is provided, only non-test top-level code will be executed
   (no `@test` or `@testset` expressions will run). This includes all function definitions,
-  imports, and other setup code, including any `include` statements
+  imports, and other setup code, including any `include` statements. Note that the files
+  included by them are executed entirely, including their `@test` and `@testset` expressions
 """
 function runtest(filename::AbstractString, patterns;
                  filter_lines=nothing,
@@ -157,8 +158,9 @@ for test suites that include multiple test files via `include` statements.
       "test/perf_tests.jl" => [50:100]  # run tests on lines 50-100
   ]
   ```
-  Files not listed in this dictionary will have all their top-level code executed
-  (excluding `@test` and `@testset` expressions)
+  Files not listed in this dictionary will have all their code executed, including
+  `@test` and `@testset` expressions. To execute only their non-test top-level code,
+  list them with an empty patterns collection
 - `filter_lines=nothing`: Optional collection of `filename => line_numbers` pairs that
   specify line-based filtering for each file. When provided for a file, only pattern matches
   that overlap with the specified lines will be executed in that file
@@ -185,7 +187,8 @@ runtests("test/runtests.jl", [
 
 # Combine with line filtering for precise control
 runtests("test/runtests.jl",
-    ["test/core.jl" => ["important tests"]],
+    ["test/runtests.jl" => [],
+     "test/core.jl" => ["important tests"]],
     filter_lines=["test/core.jl" => [45, 46, 47]]
 )
 ```
@@ -193,8 +196,8 @@ runtests("test/runtests.jl",
 # Notes
 - The entry file is always executed starting from `entryfilename`
 - Files included via `include()` statements will be discovered and processed automatically
-- For files not specified in `patterns`, all non-test top-level code is executed
-  (no @test or @testset expressions will run)
+- For files not specified in `patterns`, all code is executed, including `@test` and
+  `@testset` expressions
 - Pattern types for each file follow the same rules as `runtest`:
   strings, regexes, expressions, integers, and ranges
 """
@@ -629,36 +632,32 @@ isinclude(@nospecialize f) = f isa Base.IncludeInto || (isa(f, Function) && name
 
 function handle_include(interp::TRInterpreter, @nospecialize(include_func), args::Vector{Any})
     nargs = length(args)
-    include_context = interp.context
-    if nargs == 1
-        fname = only(args)
-    elseif nargs == 2
-        x, fname = args
-        if isa(x, Module)
-            include_context = x
-        elseif isa(x, Function)
-            @warn "TestRunner is unable to execute `include(mapexpr::Function, filename::String)` call currently."
-        else
-            @invokelatest include_func(args...) # make it throw throw
-            @assert false "unreachable"
-        end
+    if nargs == 1 && args[1] isa String
+        include_context = interp.context
+    elseif nargs == 2 && args[1] isa Module && args[2] isa String
+        include_context = args[1]::Module
+    elseif nargs ≥ 2 && args[1] isa Function && args[end] isa String
+        # `mapexpr` takes whole top-level expressions, including `module`s that
+        # `_selective_run` splits up, so `include(mapexpr, [m,] path)` runs natively, with
+        # an absolute path that native `include` doesn't resolve against `:SOURCE_PATH`
+        path = abspath(include_path(interp, args[end]::String))
+        return @invokelatest include_func(args[1:end-1]..., path)
     else
-        @invokelatest include_func(args...) # make it throw throw
-        throw(ErrorException("unreachable"))
+        return @invokelatest include_func(args...)
     end
-    if !isa(fname, String)
-        @invokelatest include_func(args...) # make it throw throw
-        @assert false "unreachable"
-    end
-    # Use `interp.root_path` only as a fallback when the current file has no
-    # meaningful directory (i.e. a virtual top-level filename). Once an
-    # include resolves into a real path, nested includes use that file's
-    # `dirname` as usual.
-    filedir = dirname(interp.filename)
-    base = isempty(filedir) ? something(interp.root_path, "") : filedir
-    included_file = normpath(base, fname)
+    included_file = include_path(interp, args[end]::String)
     newinterp = TRInterpreter(interp; filename=included_file, context=include_context)
     _selective_run(newinterp)
+end
+
+# Use `interp.root_path` only as a fallback when the current file has no
+# meaningful directory (i.e. a virtual top-level filename). Once an
+# include resolves into a real path, nested includes use that file's
+# `dirname` as usual.
+function include_path(interp::TRInterpreter, fname::String)
+    filedir = dirname(interp.filename)
+    base = isempty(filedir) ? something(interp.root_path, "") : filedir
+    return normpath(base, fname)
 end
 
 function JI.handle_err(interp::TRInterpreter, frame::JI.Frame, @nospecialize(err))

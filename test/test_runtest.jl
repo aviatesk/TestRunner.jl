@@ -231,6 +231,38 @@ let testfile = joinpath(@__DIR__, "testfile_included_tests.jl")
     end
 end
 
+module IncludeMapexprPathModule end
+@testset "mapexpr include paths ignore the caller's SOURCE_PATH" begin
+    mktempdir() do dir
+        caller = joinpath(dir, "caller")
+        mkdir(caller)
+        write(joinpath(dir, "child.jl"), "answer = 42\n")
+        write(joinpath(caller, "child.jl"), "answer = 99\n")
+        cd(dir) do
+            # Reproduce calling TestRunner from a script included in another directory.
+            task_local_storage(:SOURCE_PATH, joinpath(caller, "driver.jl")) do
+                for source in ("include(identity, \"child.jl\")",
+                               "Base.include(identity, @__MODULE__, \"child.jl\")")
+                    for root_path in (nothing, ".", dir)
+                        Core.eval(IncludeMapexprPathModule, :(answer = nothing))
+                        runtest("untitled", []; source, root_path,
+                                topmodule=IncludeMapexprPathModule)
+                        @test (@invokelatest getglobal(IncludeMapexprPathModule, :answer)) == 42
+                    end
+                end
+            end
+        end
+    end
+end
+
+module IncludeMapexprModule end
+let testfile = joinpath(@__DIR__, "testfile_include_mapexpr.jl")
+    result = @testset "include with mapexpr" runtest(testfile, ["include with mapexpr"]; topmodule=IncludeMapexprModule)
+    included = only(result.results).results
+    @test [ts.description for ts in included] == ["answer", "answer"]
+    @test all(ts -> ts.n_passed == 1, included)
+end
+
 module RunTestsModule1 end
 module RunTestsModule2 end
 module RunTestsModule3 end

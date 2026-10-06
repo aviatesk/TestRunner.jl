@@ -659,6 +659,16 @@ unrelated tests while still ensuring all code dependencies are available.
    end
    ```
 
+4. **`include` with `mapexpr`**: Files included with `mapexpr`, e.g. via
+   `include(mapexpr, path)` or `Base.include(mapexpr, mod, path)`, are
+   executed natively as a whole. `mapexpr` takes each top-level expression as
+   a whole, including `module` expressions whose contents TestRunner would
+   otherwise execute one by one, so they cannot be executed selectively.
+   As a result, patterns given to `runtests` for such files are ignored.
+   Files without their own patterns, e.g. any file included when using
+   `runtest` or the app, are executed entirely anyway, so this makes no
+   difference there.
+
 ## Development
 
 TestRunner is built on top of:
