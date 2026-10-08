@@ -518,14 +518,34 @@ execute test code:
    which serve as the bridge to lowered code
 3. Selective Interpretation: Only top-level code is interpreted;
    function calls within tests are compiled and run at normal speed
-4. Conservative Dependency Execution: Executes _all_ top-level code except
-   `@test` and `@testset` expressions to ensure tests don't fail due to
-   missing dependencies
+4. Conservative Dependency Execution: Executes _all_ code except unmatched
+   tests (`@test`, `@testset`, etc.) to ensure tests don't fail due to
+   missing dependencies. This covers top-level code as well as the code
+   around tests nested in other code, e.g. in `let` blocks and in the
+   testsets enclosing matched code, since the effects of such code, e.g.
+   definitions loaded by `include` or changes to global state, can't be
+   tracked. Only the code using what unmatched tests compute, e.g. their
+   results, is skipped along with them:
+   ```julia
+   @testset "outer" begin
+       setup()                  # runs
+       @testset "a" begin       # skipped when only "b" is matched
+           @test f() == 1
+       end
+       @testset "b" begin       # matched
+           @test g() == 2
+       end
+       result = @testset "c" begin  # skipped
+           @test h() == 3
+       end
+       report(result)           # skipped, since it uses the result of "c"
+   end
+   ```
 5. Recursive Inclusion: Files included by matched code, e.g. by
    `@testset "name" include("file.jl")`, are executed entirely. Files
-   included by the other executed code, including `include` calls directly in
-   the testsets enclosing matched code, only have their non-test top-level
-   code executed, like the conservative dependency execution above
+   included by the other executed code, including `include` calls in the
+   testsets enclosing matched code, only have their non-test top-level code
+   executed, like the conservative dependency execution above
 
 The key insight is that in reasonably-organized test code, the conservative
 dependency execution would only run the function and type definitions necessary

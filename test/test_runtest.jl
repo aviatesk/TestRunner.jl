@@ -320,32 +320,73 @@ module GlobalIncludeUnmatchedModule end
     end
 end
 
-module QualifiedIncludeModule end
-module NestedQualifiedIncludeModule end
-@testset "qualified include in an enclosing testset" begin
-    for (qualifier, topmodule) in (("Base", QualifiedIncludeModule),
-                                   ("Main.Base", NestedQualifiedIncludeModule))
+module EnclosingIncludeModule end
+module EnclosingCallIncludeModule end
+@testset "code in enclosing testsets" begin
+    # `call_include` includes the file natively, which runs its tests as well
+    for (setup, topmodule, expected) in (
+        ("Base.include(@__MODULE__, \"_testfile_include_selection2.jl\")",
+         EnclosingIncludeModule, ["inner"]),
+        ("call_include(\"_testfile_include_selection2.jl\")",
+         EnclosingCallIncludeModule, ["included tests 1", "included tests 2", "inner"]))
         source = """
         using Test
-        holder = (; include = error)
+        call_include(file) = include(joinpath(@__DIR__, file))
         @testset "outer" begin
-            holder.include("non-module property must not be selected")
-            $qualifier.include(@__MODULE__, "_testfile_include_selection2.jl")
+            $setup
             @testset "sibling" begin
-                $qualifier.include(@__MODULE__, "missing.jl")
+                include("missing.jl")
             end
             @testset "inner" begin
                 @test value2() == 2
             end
         end
         """
-        filename = joinpath(@__DIR__, "qualified-include.jl")
-        result = @testset "qualified include" runtest(filename, ["inner"]; source, topmodule)
+        filename = joinpath(@__DIR__, "enclosing-code.jl")
+        result = @testset "enclosing code" runtest(filename, ["inner"]; source, topmodule)
         outer = only(result.results)
         @test outer.description == "outer"
-        inner = only(outer.results)
-        @test inner.description == "inner"
-        @test inner.n_passed == 1
+        @test [ts.description for ts in outer.results] == expected
+        @test all(ts -> ts.n_passed == 1, outer.results)
+    end
+end
+
+module WrappedTestsModule1 end
+module WrappedTestsModule2 end
+module WrappedTestsModule3 end
+module WrappedTestsModule4 end
+module WrappedTestsModule5 end
+module WrappedTestsModule6 end
+@testset "tests nested in non-test code run only when matched" begin
+    testfile = joinpath(@__DIR__, "testfile_wrapped_tests.jl")
+    descriptions(ts) = [r.description for r in ts.results if r isa Test.DefaultTestSet]
+
+    let result = @testset "non-test code" runtest(testfile, ["non-test code"]; topmodule=WrappedTestsModule1)
+        @test descriptions(result) == ["non-test code"]
+        @test result.n_passed == 0
+        @test only(result.results).n_passed == 5
+        # The code using the result of an unmatched test doesn't run
+        @test !(@invokelatest isdefinedglobal(WrappedTestsModule1, :result_count))
+    end
+    let result = @testset "no patterns" runtest(testfile, []; topmodule=WrappedTestsModule2)
+        @test isempty(result.results)
+        @test result.n_passed == 0
+        @test (@invokelatest getglobal(WrappedTestsModule2, :mutated)) == [1, 2, 3, 4]
+    end
+    let result = @testset "testset in let" runtest(testfile, ["let testset"]; topmodule=WrappedTestsModule3)
+        @test descriptions(result) == ["let testset"]
+        @test result.n_passed == 0
+    end
+    let result = @testset "test in let" runtest(testfile, [29]; topmodule=WrappedTestsModule4)
+        @test isempty(result.results)
+        @test result.n_passed == 1
+    end
+    let result = @testset "testset in for" runtest(testfile, ["for testset"]; topmodule=WrappedTestsModule5)
+        @test descriptions(result) == ["for testset", "for testset"]
+    end
+    let result = @testset "testset result" runtest(testfile, ["result testset"]; topmodule=WrappedTestsModule6)
+        @test descriptions(result) == ["result testset"]
+        @test (@invokelatest getglobal(WrappedTestsModule6, :result_count)) == 1
     end
 end
 

@@ -110,11 +110,12 @@ runtest("testfile.jl", ["unit tests", r"helper.*", 42])
 ```
 
 # Notes
-- All top-level code (except @test and @testset) is automatically executed
+- All code except unmatched tests (`@test`, `@testset`, etc.) is automatically executed,
+  both at the top level and around tests nested in other code, e.g. in `let` blocks or in
+  the testsets enclosing matched code. Only the code using what unmatched tests compute,
+  e.g. `n = (@testset "name" ...).n_passed`, is skipped along with them
 - Only top-level code is interpreted; function calls within tests are compiled for performance
-- Matched code runs within its enclosing testsets without running their other tests.
-  `include` statements directly in those testsets are still executed, since they may define
-  what the matched code uses
+- Matched code runs within its enclosing testsets without running their other tests
 - If an empty patterns collection is provided, only non-test top-level code will be executed
   (no `@test` or `@testset` expressions will run). This includes all function definitions,
   imports, and other setup code, including any `include` statements
@@ -301,6 +302,7 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
         lines = Set{Int}()
         isnothing(patterns) || matched_lines!(lines, node, patterns, filter_lines)
         nodeinterp = TRInterpreter(interp; selected_lines=lines)
+        test_lines = isnothing(patterns) ? Set{Int}() : unmatched_test_lines(node, lines)
 
         if !isnothing(patterns) && is_test_expr
             # For @testset and @test, use pattern matching
@@ -316,16 +318,18 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
             src = only(lwr.args)::CodeInfo
 
             concretized = falses(length(src.code))
-            controller = select_statements!(nodeinterp, concretized, src, context, lines)
+            controller = select_statements!(nodeinterp, concretized, src, context, lines,
+                                            test_lines)
 
             frame = JI.Frame(context, src)
             ret = LCU.selective_eval_fromstart!(nodeinterp, frame, concretized, controller, #=istoplevel=#true)
         else
-            # Unconditionally execute non-test top-level code,
-            # or no patterns are specified for this file.
+            # Unconditionally execute non-test top-level code, except the unmatched tests
+            # nested in it, or no patterns are specified for this file.
             # Note: We use `JI.finish_and_return!` here instead of `Core.eval`
             # to ensure proper handling of `include` statements through our
             # custom `evaluate_call!` implementation
+            isempty(test_lines) || (expr = attribute_testset_to_call_site(expr::Expr))
             # `global x` alone can't be lowered within a block on Julia 1.12, and has no code
             # for `is_matched` to check anyway
             isdecl = Meta.isexpr(expr, :global) &&
@@ -343,7 +347,15 @@ function _selective_run(interp::TRInterpreter, sntop::JS.SyntaxNode)
             src = only(lwr.args)::CodeInfo
 
             frame = JI.Frame(context, src)
-            ret = JI.finish_and_return!(nodeinterp, frame, #=istoplevel=#true)
+            if isempty(test_lines)
+                ret = JI.finish_and_return!(nodeinterp, frame, #=istoplevel=#true)
+            else
+                concretized = falses(length(src.code))
+                controller = select_statements!(nodeinterp, concretized, src, context,
+                                                lines, test_lines)
+                ret = LCU.selective_eval_fromstart!(nodeinterp, frame, concretized,
+                                                    controller, #=istoplevel=#true)
+            end
         end
     end
     return ret
@@ -445,20 +457,49 @@ function matches_named_testset_call(pat::Union{AbstractString,Regex}, @nospecial
     return pat isa Regex ? occursin(pat, name) : pat == name
 end
 
-function is_testset_or_test(@nospecialize expr)
-    # Check if expression is a test-related macro call
-    return MacroTools.@capture(expr, @inferred(xs__)) ||
-           MacroTools.@capture(expr, @test(xs__)) ||
-           MacroTools.@capture(expr, @test_broken(xs__)) ||
-           MacroTools.@capture(expr, @test_deprecated(xs__)) ||
-           MacroTools.@capture(expr, @test_logs(xs__)) ||
-           MacroTools.@capture(expr, @test_warn(xs__)) ||
-           MacroTools.@capture(expr, @test_skip(xs__)) ||
-           MacroTools.@capture(expr, @test_throws(xs__)) ||
-           MacroTools.@capture(expr, @testset(xs__))
+# The lines of the test macro calls in `node` that don't overlap `matched_lines`. The tests
+# that do overlap them are matched or enclose matched code, so the code in them is searched
+# for unmatched tests like any other code, except definitions and quoted code, which don't
+# run along with `node`.
+function unmatched_test_lines(node::JS.SyntaxNode, matched_lines::Set{Int})
+    lines = Set{Int}()
+    stack = JS.SyntaxNode[node]
+    while !isempty(stack)
+        current = pop!(stack)
+        kind = JS.kind(current)
+        if kind == JS.K"function" || kind == JS.K"macro" || kind == JS.K"->" ||
+           kind == JS.K"quote"
+            continue
+        elseif kind == JS.K"macrocall" && is_testset_or_test(Expr(current))
+            sourcefile = JS.sourcefile(current)
+            first_line = JS.source_line(sourcefile, JS.first_byte(current))
+            last_line = JS.source_line(sourcefile, JS.last_byte(current))
+            if !any(in(matched_lines), first_line:last_line)
+                union!(lines, first_line:last_line)
+                continue
+            end
+        end
+        for i = JS.numchildren(current):-1:1
+            push!(stack, current[i])
+        end
+    end
+    return lines
 end
 
-function select_statements!(interp::TRInterpreter, concretized::BitVector, src::CodeInfo, mod::Module, lines::Set{Int})
+# Compared without MacroTools, which would take the underscores in e.g. `@test_broken` for
+# pattern variables
+const TEST_MACRO_NAMES = (Symbol("@inferred"), Symbol("@test"), Symbol("@test_broken"),
+                          Symbol("@test_deprecated"), Symbol("@test_logs"),
+                          Symbol("@test_warn"), Symbol("@test_nowarn"), Symbol("@test_skip"),
+                          Symbol("@test_throws"), Symbol("@testset"))
+
+function is_testset_or_test(@nospecialize expr)
+    # Check if expression is a test-related macro call
+    return Meta.isexpr(expr, :macrocall) && expr.args[1] in TEST_MACRO_NAMES
+end
+
+function select_statements!(interp::TRInterpreter, concretized::BitVector, src::CodeInfo,
+                            mod::Module, lines::Set{Int}, test_lines::Set{Int})
     cl = LCU.CodeLinks(mod, src)
     edges = LCU.CodeEdges(src, cl)
 
@@ -471,11 +512,9 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
             concretized[idx] = true
         end
     end
-    enclosing_stacks = enclosing_line_stacks(concretized, line_stacks)
-    select_enclosing_macro_code!(concretized, line_stacks, enclosing_stacks)
-    select_enclosing_includes!(concretized, src, line_stacks, enclosing_stacks)
+    excluded = select_nontest_code!(concretized, edges, line_stacks, test_lines)
 
-    controller = select_dependencies!(concretized, src, edges, cl)
+    controller = select_dependencies!(concretized, src, edges, cl, excluded)
 
     # Debug: uncomment to see which statements are selected
     # LCU.print_with_code(stdout, src, concretized)
@@ -483,80 +522,44 @@ function select_statements!(interp::TRInterpreter, concretized::BitVector, src::
     return controller
 end
 
+# Select the code around the unmatched tests attributed to `test_lines`, e.g. the rest of a
+# `let` block or an enclosing `@testset` wrapping them, except those tests and the code
+# using what they compute. Return them as `excluded`, so that the dependency selection adds
+# them only when needed. Statements without lines, e.g. some `goto`s, are left to the
+# dependency selection.
+function select_nontest_code!(concretized::BitVector, edges::LCU.CodeEdges,
+                              line_stacks::Vector{Vector{Int}}, test_lines::Set{Int})
+    excluded = falses(length(concretized))
+    worklist = Int[]
+    for idx in 1:length(concretized)
+        if !concretized[idx] && any(in(test_lines), line_stacks[idx])
+            excluded[idx] = true
+            push!(worklist, idx)
+        end
+    end
+    while !isempty(worklist)
+        for succ in edges.succs[pop!(worklist)]
+            if !concretized[succ] && !excluded[succ]
+                excluded[succ] = true
+                push!(worklist, succ)
+            end
+        end
+    end
+    for idx in 1:length(concretized)
+        if !excluded[idx] && !isempty(line_stacks[idx])
+            concretized[idx] = true
+        end
+    end
+    return excluded
+end
+
 function stmt_line_stack(interp::TRInterpreter, src::CodeInfo, idx::Int)
     lins = Base.IRShow.buildLineInfoNode(src.debuginfo, nothing, idx)
     return Int[lin.line for lin in lins if String(lin.file) == interp.filename]
 end
 
-# The code expanded from an enclosing macro call, e.g. the setup and teardown of an enclosing
-# `@testset`, is attributed to a proper prefix of the line stack of the code nested in it,
-# while the other code in the macro call (e.g. the other tests of that `@testset`) is
-# attributed to longer stacks.
-function enclosing_line_stacks(concretized::BitVector, line_stacks::Vector{Vector{Int}})
-    prefixes = Set{Vector{Int}}()
-    for idx in 1:length(concretized)
-        concretized[idx] || continue
-        line_stack = line_stacks[idx]
-        for n in 1:length(line_stack)-1
-            push!(prefixes, line_stack[1:n])
-        end
-    end
-    return prefixes
-end
-
-# Select the code expanded from the enclosing macro calls so that the selected code runs within
-# its enclosing context, e.g. so that selected tests are recorded into their enclosing testsets.
-function select_enclosing_macro_code!(concretized::BitVector, line_stacks::Vector{Vector{Int}},
-                                      enclosing_stacks::Set{Vector{Int}})
-    for idx in 1:length(concretized)
-        if !concretized[idx] && line_stacks[idx] in enclosing_stacks
-            concretized[idx] = true
-        end
-    end
-    return concretized
-end
-
-# `include` calls directly in the enclosing context, e.g. in the body of an enclosing
-# `@testset`, may define what the selected code uses, which the dependency analysis can't see.
-function select_enclosing_includes!(concretized::BitVector, src::CodeInfo,
-                                    line_stacks::Vector{Vector{Int}},
-                                    enclosing_stacks::Set{Vector{Int}})
-    for idx in 1:length(concretized)
-        line_stack = line_stacks[idx]
-        if !concretized[idx] && !isempty(line_stack) &&
-           line_stack[1:end-1] in enclosing_stacks && is_include_call(src, idx)
-            concretized[idx] = true
-        end
-    end
-    return concretized
-end
-
-function is_include_call(src::CodeInfo, idx::Int)
-    stmt = src.code[idx]
-    Meta.isexpr(stmt, :(=)) && (stmt = stmt.args[2])
-    Meta.isexpr(stmt, :call) || return false
-    f = resolve_global_ref(src, stmt.args[1])
-    f === nothing && return false
-    return (@invokelatest isdefinedglobal(f.mod, f.name)) &&
-           isinclude(@invokelatest getglobal(f.mod, f.name))
-end
-
-function resolve_global_ref(src::CodeInfo, @nospecialize(x))
-    x isa SSAValue && return resolve_global_ref(src, src.code[x.id])
-    x isa GlobalRef && return x
-    if Meta.isexpr(x, :call, 3) && x.args[1] == GlobalRef(Base, :getproperty)
-        name = x.args[3]
-        name isa QuoteNode && name.value isa Symbol || return nothing
-        ref = resolve_global_ref(src, x.args[2])
-        ref === nothing && return nothing
-        (@invokelatest isdefinedglobal(ref.mod, ref.name)) || return nothing
-        mod = @invokelatest getglobal(ref.mod, ref.name)
-        mod isa Module && return GlobalRef(mod, name.value)
-    end
-    return nothing
-end
-
-function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
+function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl,
+                              excluded::BitVector)
     typedefs = LCU.find_typedefs(src)
     cfg = CC.compute_basic_blocks(src.code)
     postdomtree = CC.construct_postdomtree(cfg.blocks)
@@ -566,8 +569,8 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
     while changed
         changed = false
         changed |= LCU.add_ssa_preds!(concretized, src, edges, ())
-        changed |= add_ssas_uses!(concretized, ssavalue_uses)
-        changed |= add_slot_deps!(concretized, cl)
+        changed |= add_ssas_uses!(concretized, ssavalue_uses, excluded)
+        changed |= add_slot_deps!(concretized, cl, excluded)
         changed |= LCU.add_typedefs!(concretized, src, edges, typedefs, ())
         changed |= LCU.add_control_flow!(concretized, src, cfg, postdomtree)
     end
@@ -580,12 +583,12 @@ function select_dependencies!(concretized::BitVector, src::CodeInfo, edges, cl)
 end
 
 # Add statements that use SSA values produced by already selected statements
-function add_ssas_uses!(concretized::BitVector, ssavalue_uses)
+function add_ssas_uses!(concretized::BitVector, ssavalue_uses, excluded::BitVector)
     changed = false
     for idx = 1:length(concretized)
         if concretized[idx]
             for use_idx in ssavalue_uses[idx]
-                if !concretized[use_idx]
+                if !concretized[use_idx] && !excluded[use_idx]
                     concretized[use_idx] = true
                     changed = true
                 end
@@ -595,7 +598,7 @@ function add_ssas_uses!(concretized::BitVector, ssavalue_uses)
     return changed
 end
 
-function add_slot_deps!(concretized::BitVector, cl::LCU.CodeLinks)
+function add_slot_deps!(concretized::BitVector, cl::LCU.CodeLinks, excluded::BitVector)
     changed = false
 
     # For each slot, check if any selected statement uses it
@@ -637,7 +640,7 @@ function add_slot_deps!(concretized::BitVector, cl::LCU.CodeLinks)
 
         # Select all prior uses of the slot (to ensure their effects are included)
         for succ_idx in slot_succs.ssas
-            if !concretized[succ_idx]
+            if !concretized[succ_idx] && !excluded[succ_idx]
                 # Only select uses that come before the latest selected use
                 # This helps avoid selecting unrelated later uses
                 latest_selected = 0
