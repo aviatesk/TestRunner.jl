@@ -63,7 +63,19 @@ function show_error_trace(@nospecialize e)
     println(stderr)
 end
 
+const MIGRATION_NOTICE = """
+    TestRunner.jl has moved into JETLS.jl, and this installation no longer receives \
+    updates. Reinstall the `testrunner` app with \
+    `julia -e 'using Pkg; Pkg.Apps.add(; url="https://github.com/aviatesk/JETLS.jl", subdir="TestRunner", rev="release")'`; \
+    see https://github.com/aviatesk/TestRunner.jl#migration for details.
+    """
+
 function (@main)(args::Vector{String})
+    # The JSON output is parsed by editor integrations, e.g. older versions of JETLS, and
+    # the precompilation workload calls this function as well.
+    if "--json" ∉ args && ccall(:jl_generating_output, Cint, ()) == 0
+        warning_print(MIGRATION_NOTICE)
+    end
     if isempty(args)
         print_usage()
         return 1
